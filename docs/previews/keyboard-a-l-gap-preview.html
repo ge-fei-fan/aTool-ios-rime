@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transparent Edge Spacer Preview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #eef1f5;
+      color: #1e2430;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .phone {
+      width: min(430px, 100%);
+      padding: 18px 12px 14px;
+      border-radius: 26px;
+      background: #f8f9fb;
+      box-shadow: 0 24px 60px rgba(24, 32, 48, 0.18);
+    }
+
+    .input {
+      height: 44px;
+      margin: 0 4px 16px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: inset 0 0 0 1px rgba(31, 36, 48, 0.08);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .placeholder {
+      color: #8d95a3;
+    }
+
+    .keyboard {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      padding: 12px 4px 6px;
+      border-radius: 14px;
+      background: #d9dee7;
+      overflow: visible;
+    }
+
+    .row {
+      display: grid;
+      gap: 6px;
+      height: 42px;
+    }
+
+    .row.top {
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+    }
+
+    .row.home {
+      grid-template-columns: 0.5fr repeat(9, minmax(0, 1fr)) 0.5fr;
+    }
+
+    .key,
+    .gap {
+      position: relative;
+      border: 0;
+      border-radius: 6px;
+      font: inherit;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    .key {
+      background: #ffffff;
+      color: #1f2430;
+      box-shadow: 0 1px 0 rgba(31, 36, 48, 0.32);
+      cursor: pointer;
+    }
+
+    .key.is-active {
+      background: #f4f6fa;
+    }
+
+    .gap {
+      background: transparent;
+      box-shadow: none;
+      cursor: pointer;
+    }
+
+    .gap.is-active {
+      background: rgba(31, 36, 48, 0.05);
+      filter: none;
+    }
+
+    .gap--top-left,
+    .gap--top-right {
+      position: absolute;
+      top: 12px;
+      width: 28px;
+      height: 42px;
+      z-index: 1;
+    }
+
+    .gap--top-left {
+      left: 4px;
+    }
+
+    .gap--top-right {
+      right: 4px;
+    }
+
+    .preview {
+      position: absolute;
+      width: 52px;
+      height: 84px;
+      display: grid;
+      place-items: start center;
+      padding-top: 14px;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(6px) scale(0.96);
+      transition: opacity 80ms ease, transform 80ms ease;
+      z-index: 2;
+    }
+
+    .preview.is-visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .preview-bubble {
+      position: absolute;
+      inset: 0 0 12px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: 0 3px 10px rgba(24, 32, 48, 0.18);
+    }
+
+    .preview-tail {
+      position: absolute;
+      left: var(--tail-x, 26px);
+      bottom: 2px;
+      width: 15px;
+      height: 15px;
+      background: #ffffff;
+      transform: translateX(-50%) rotate(45deg);
+      box-shadow: 2px 2px 4px rgba(24, 32, 48, 0.08);
+    }
+
+    .preview-text {
+      position: relative;
+      z-index: 1;
+      font-size: 34px;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="Keyboard transparent edge spacer preview">
+    <div class="input" aria-live="polite">
+      <span id="inputText" class="placeholder">Tap keys</span>
+    </div>
+
+    <section class="keyboard" id="keyboard">
+      <div class="preview" id="preview" aria-hidden="true">
+        <div class="preview-bubble"></div>
+        <div class="preview-tail"></div>
+        <div class="preview-text" id="previewText"></div>
+      </div>
+
+      <button class="gap gap--top-left" data-key="q" data-source="[data-top-key='q']" aria-label="q left edge"></button>
+      <button class="gap gap--top-right" data-key="p" data-source="[data-top-key='p']" aria-label="p right edge"></button>
+
+      <div class="row top">
+        <button class="key" data-key="q" data-top-key="q">q</button>
+        <button class="key" data-key="w">w</button>
+        <button class="key" data-key="e">e</button>
+        <button class="key" data-key="r">r</button>
+        <button class="key" data-key="t">t</button>
+        <button class="key" data-key="y">y</button>
+        <button class="key" data-key="u">u</button>
+        <button class="key" data-key="i">i</button>
+        <button class="key" data-key="o">o</button>
+        <button class="key" data-key="p" data-top-key="p">p</button>
+      </div>
+
+      <div class="row home">
+        <button class="gap" data-key="a" data-source="[data-home-key='a']" aria-label="a left gap"></button>
+        <button class="key" data-key="a" data-home-key="a">a</button>
+        <button class="key" data-key="s">s</button>
+        <button class="key" data-key="d">d</button>
+        <button class="key" data-key="f">f</button>
+        <button class="key" data-key="g">g</button>
+        <button class="key" data-key="h">h</button>
+        <button class="key" data-key="j">j</button>
+        <button class="key" data-key="k">k</button>
+        <button class="key" data-key="l" data-home-key="l">l</button>
+        <button class="gap" data-key="l" data-source="[data-home-key='l']" aria-label="l right gap"></button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const keyboard = document.querySelector("#keyboard");
+    const inputText = document.querySelector("#inputText");
+    const preview = document.querySelector("#preview");
+    const previewText = document.querySelector("#previewText");
+    let typed = "";
+    let activeElement = null;
+    let activePointers = new Map();
+
+    function sourceFor(element) {
+      const selector = element.dataset.source;
+      return selector ? document.querySelector(selector) : element;
+    }
+
+    function showPreview(element) {
+      const source = sourceFor(element);
+      const key = element.dataset.key;
+      const sourceRect = source.getBoundingClientRect();
+      const keyboardRect = keyboard.getBoundingClientRect();
+      const centeredX = sourceRect.left - keyboardRect.left + sourceRect.width / 2 - 26;
+      const originX = Math.min(Math.max(centeredX, 4), keyboardRect.width - 56);
+      const tailX = Math.min(Math.max(sourceRect.left - keyboardRect.left + sourceRect.width / 2 - originX, 14), 38);
+
+      preview.style.left = `${originX}px`;
+      preview.style.top = `${sourceRect.top - keyboardRect.top - 81}px`;
+      preview.style.setProperty("--tail-x", `${tailX}px`);
+      previewText.textContent = key;
+      preview.classList.add("is-visible");
+      source.classList.add("is-active");
+      element.classList.add("is-active");
+      activeElement = element;
+    }
+
+    function hidePreview() {
+      if (!activeElement) {
+        return;
+      }
+
+      sourceFor(activeElement).classList.remove("is-active");
+      activeElement.classList.remove("is-active");
+      activeElement = null;
+      preview.classList.remove("is-visible");
+    }
+
+    function commitKey(element) {
+      typed += element.dataset.key;
+      inputText.textContent = typed;
+      inputText.classList.remove("placeholder");
+    }
+
+    function pointInside(element, event) {
+      const rect = element.getBoundingClientRect();
+      return (
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom
+      );
+    }
+
+    document.querySelectorAll("[data-key]").forEach((element) => {
+      element.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        element.setPointerCapture(event.pointerId);
+        activePointers.set(event.pointerId, element);
+        showPreview(element);
+      });
+
+      element.addEventListener("pointermove", (event) => {
+        if (activePointers.get(event.pointerId) !== element) {
+          return;
+        }
+
+        if (pointInside(element, event)) {
+          showPreview(element);
+        } else {
+          hidePreview();
+        }
+      });
+
+      element.addEventListener("pointerup", (event) => {
+        if (activePointers.get(event.pointerId) === element && pointInside(element, event)) {
+          commitKey(element);
+        }
+        activePointers.delete(event.pointerId);
+        hidePreview();
+      });
+
+      element.addEventListener("pointercancel", (event) => {
+        activePointers.delete(event.pointerId);
+        hidePreview();
+      });
+      element.addEventListener("lostpointercapture", (event) => {
+        activePointers.delete(event.pointerId);
+        hidePreview();
+      });
+    });
+  </script>
+</body>
+</html>

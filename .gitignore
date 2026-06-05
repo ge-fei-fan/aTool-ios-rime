@@ -1,0 +1,22 @@
+.DS_Store
+
+# Xcode user-specific state
+*.xcuserstate
+xcuserdata/
+.superpowers/
+
+# Local dependency/download scratch space
+.gh-tmp/
+
+# Local build/package outputs
+build/
+*.ipa
+
+# Local logs and crash reports
+*.log
+*.ips
+*.crash
+*.xcresult/
+
+# Windows crash dumps
+*.stackdump

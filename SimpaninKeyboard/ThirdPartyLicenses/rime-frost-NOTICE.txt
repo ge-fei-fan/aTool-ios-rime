@@ -1,0 +1,12 @@
+rime-frost dictionary notice
+
+This keyboard bundles converted dictionary data derived from:
+https://github.com/gaboolic/rime-frost
+
+rime-frost is released under the GNU General Public License v3.0.
+The bundled Rime resources include dictionary and schema data derived from
+rime-frost for offline lookup in the keyboard extension.
+
+rime-frost notes that its original configuration and most dictionary
+configuration were derived from rime-ice:
+https://github.com/iDvel/rime-ice

@@ -1,0 +1,133 @@
+# Rime schema
+# encoding: utf-8
+schema:
+  schema_id: wanxiang_ios
+  name: 万象拼音 iOS 基础
+  version: "LTS-iOS"
+  author:
+    - amzxyz
+  description: |
+    iOS 键盘稳定轻量方案，仅保留全拼主词库和标点，避免键盘扩展启动时加载多套词库导致内存压力。
+
+switches:
+  - name: ascii_mode
+    states: [ 中文, 英文 ]
+  - name: ascii_punct
+    states: [ 中标, 英标 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - options: [ raw_input, tone_display, full_pinyin ]
+    states: [ 原编码, 有声调, 无声调 ]
+  - options: [ s2s, s2t, s2hk, s2tw ]
+    states: [ 简体, 通繁, 港繁, 臺繁 ]
+  - name: abbrev
+    states: [ 简码关, 简码开 ]
+    reset: 0
+  - options: [ comment_off, tone_hint, toneless_hint ]
+    states: [ 注释关, 有声调, 无声调 ]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - script_translator
+    - table_translator@custom_phrase
+  filters:
+    - uniquifier
+
+translator:
+  dictionary: wanxiang_ios
+  prism: wanxiang_ios
+  enable_completion: true
+  enable_user_dict: false
+  enable_encoder: false
+  enable_sentence: false
+  enable_correction: false
+  encode_commit_history: false
+  contextual_suggestions: false
+  core_word_length: 0
+  max_word_length: 0
+  max_homophones: 8
+  initial_quality: 3
+  spelling_hints: 30
+  always_show_comments: true
+  comment_format:
+
+custom_phrase:
+  dictionary: ""
+  user_dict: custom_phrase
+  db_class: stabledb
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 99
+
+recognizer:
+  import_preset: default
+  patterns:
+    punct: "^/([0-9]|10|[A-Za-z]+)$"
+    email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$"
+
+punctuator:
+  digit_separators: ",.:"
+  __include: wanxiang_symbols:/symbol_table
+
+key_binder:
+  import_preset: default
+  bindings:
+    - { when: has_menu, accept: minus, send: Page_Up }
+    - { when: has_menu, accept: equal, send: Page_Down }
+    - { when: always, toggle: ascii_punct, accept: Control+Shift+3 }
+    - { when: always, toggle: ascii_punct, accept: Control+Shift+numbersign }
+    - { when: always, toggle: s2t, accept: Control+Shift+4 }
+    - { when: always, toggle: s2t, accept: Control+Shift+dollar }
+    - { when: composing, accept: Alt+Left, send: Shift+Left }
+    - { when: composing, accept: Alt+Right, send: Shift+Right }
+    - { when: composing, accept: Control+w, send: Control+BackSpace }
+    - { when: has_menu, accept: "Control+a", toggle: tone_hint }
+    - { when: has_menu, accept: "Control+s", toggle: tone_display }
+    - { when: has_menu, accept: "Tab", send: "Control+Right" }
+    - { when: composing, accept: "Tab", send: "Control+Right" }
+
+editor:
+  bindings:
+    space: confirm
+    Return: commit_raw_input
+    Control+Return: commit_script_text
+    Control+Shift+Return: commit_comment
+    BackSpace: revert
+    Delete: delete
+    Control+BackSpace: back_syllable
+    Control+Delete: delete_candidate
+    Escape: cancel
+
+navigator:
+  bindings:
+    Left: left_by_char_no_loop
+    Right: right_by_char_no_loop
+    Shift+Left: left_by_syllable
+    Shift+Right: right_by_syllable
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA1234567890`;/\›
+  initials: zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA/›
+  delimiter: " '"
+  visual_delimiter: " "
+  tone_isolate: true
+  algebra:
+    __patch:
+      - wanxiang_algebra:/base/全拼

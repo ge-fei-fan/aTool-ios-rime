@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Language Switch Icon Preview</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --page: #eef1f6;
+      --panel: #d4d8df;
+      --key: #a8afb8;
+      --key-dark: #6a6a70;
+      --shadow: rgba(31, 36, 48, 0.42);
+      --text: #ffffff;
+      --muted: rgba(255, 255, 255, 0.5);
+      --blue: #58a6ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--page);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .stage {
+      width: min(420px, calc(100vw - 32px));
+      padding: 22px;
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 18px 42px rgba(33, 38, 51, 0.24);
+    }
+
+    .samples {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+
+    .sample {
+      display: grid;
+      justify-items: center;
+      gap: 10px;
+      color: #3b414d;
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .keyboard {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1.35fr 3.55fr 1fr 1.55fr;
+      gap: 6px;
+    }
+
+    .key,
+    .language-key {
+      height: 42px;
+      border: 0;
+      border-radius: 6px;
+      background: var(--key);
+      box-shadow: 0 1px 0 var(--shadow);
+      color: #111;
+      font: 16px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 0;
+    }
+
+    .key--space {
+      background: #fff;
+    }
+
+    .language-key {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .language-icon {
+      position: relative;
+      width: 30px;
+      height: 30px;
+    }
+
+    .language-icon__glyph {
+      position: absolute;
+      display: block;
+      line-height: 1;
+      letter-spacing: 0;
+      font-weight: 600;
+      color: var(--muted);
+      transform-origin: center;
+    }
+
+    .language-icon__glyph--chinese {
+      top: 2px;
+      left: 1px;
+      font-size: 16px;
+    }
+
+    .language-icon__glyph--english {
+      right: 0;
+      bottom: 1px;
+      font-size: 18px;
+    }
+
+    .language-key[data-state="chinese"] .language-icon__glyph--chinese {
+      color: var(--blue);
+      font-size: 19px;
+      font-weight: 700;
+    }
+
+    .language-key[data-state="english"] .language-icon__glyph--chinese {
+      color: rgba(255, 255, 255, 0.42);
+      font-size: 16px;
+    }
+
+    .language-key[data-state="chinese"] .language-icon__glyph--english {
+      color: rgba(255, 255, 255, 0.42);
+      font-size: 14px;
+    }
+
+    .language-key[data-state="english"] .language-icon__glyph--english {
+      color: var(--blue);
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .dark-preview {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 14px;
+      background: #2a2a2c;
+    }
+
+    .dark-preview .row {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .dark-preview .language-key {
+      background: var(--key-dark);
+    }
+  </style>
+</head>
+<body>
+  <main class="stage" aria-label="Language switch key preview">
+    <section class="samples" aria-label="Standalone language states">
+      <div class="sample">
+        <button class="language-key" data-state="chinese" aria-label="Switch to English">
+          <span class="language-icon" aria-hidden="true">
+            <span class="language-icon__glyph language-icon__glyph--chinese">中</span>
+            <span class="language-icon__glyph language-icon__glyph--english">英</span>
+          </span>
+        </button>
+        <span>Chinese input</span>
+      </div>
+      <div class="sample">
+        <button class="language-key" data-state="english" aria-label="Switch to Chinese">
+          <span class="language-icon" aria-hidden="true">
+            <span class="language-icon__glyph language-icon__glyph--chinese">中</span>
+            <span class="language-icon__glyph language-icon__glyph--english">英</span>
+          </span>
+        </button>
+        <span>English input</span>
+      </div>
+    </section>
+
+    <section class="keyboard" aria-label="Keyboard control row preview">
+      <div class="row">
+        <button class="key">123</button>
+        <button class="key key--space">Space</button>
+        <button class="language-key" data-state="chinese" aria-label="Switch to English">
+          <span class="language-icon" aria-hidden="true">
+            <span class="language-icon__glyph language-icon__glyph--chinese">中</span>
+            <span class="language-icon__glyph language-icon__glyph--english">英</span>
+          </span>
+        </button>
+        <button class="key">Return</button>
+      </div>
+    </section>
+
+    <section class="dark-preview" aria-label="Dark keyboard state preview">
+      <div class="row">
+        <button class="language-key" data-state="chinese" aria-label="Switch to English">
+          <span class="language-icon" aria-hidden="true">
+            <span class="language-icon__glyph language-icon__glyph--chinese">中</span>
+            <span class="language-icon__glyph language-icon__glyph--english">英</span>
+          </span>
+        </button>
+        <button class="language-key" data-state="english" aria-label="Switch to Chinese">
+          <span class="language-icon" aria-hidden="true">
+            <span class="language-icon__glyph language-icon__glyph--chinese">中</span>
+            <span class="language-icon__glyph language-icon__glyph--english">英</span>
+          </span>
+        </button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

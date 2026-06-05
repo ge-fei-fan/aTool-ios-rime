@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cat Mascot Heart Preview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f4f5f8;
+      color: #1f2430;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+    }
+
+    .preview {
+      width: min(520px, 100%);
+      display: grid;
+      gap: 18px;
+    }
+
+    .keyboard {
+      padding: 14px;
+      border-radius: 20px;
+      background: #d8dce4;
+      box-shadow: 0 22px 50px rgba(26, 31, 44, 0.16);
+    }
+
+    .composition-bar {
+      position: relative;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      overflow: visible;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    }
+
+    .text {
+      flex: 1;
+      min-width: 0;
+      font-size: 15px;
+      line-height: 1;
+      white-space: nowrap;
+      color: #252832;
+    }
+
+    .caret {
+      display: inline-block;
+      width: 1.5px;
+      height: 16px;
+      margin-left: 1px;
+      vertical-align: -3px;
+      border-radius: 999px;
+      background: #2578ff;
+    }
+
+    .mascot-button {
+      position: relative;
+      width: 54px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      margin-left: 8px;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      overflow: visible;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .cat {
+      width: 32px;
+      height: 38px;
+      object-fit: contain;
+      pointer-events: none;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+      transform-origin: 50% 82%;
+    }
+
+    .mascot-button.is-playing .cat {
+      animation: cat-bounce 680ms cubic-bezier(0.2, 0.8, 0.18, 1);
+    }
+
+    .heart {
+      position: absolute;
+      left: 50%;
+      top: 52%;
+      width: var(--size);
+      height: var(--size);
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -50%) rotate(45deg) scale(0.45);
+      animation: float-heart var(--duration) cubic-bezier(0.18, 0.84, 0.24, 1) forwards;
+      animation-delay: var(--delay);
+    }
+
+    .heart::before,
+    .heart::after,
+    .heart {
+      background: var(--color);
+    }
+
+    .heart::before,
+    .heart::after {
+      content: "";
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+    }
+
+    .heart::before {
+      left: -50%;
+      top: 0;
+    }
+
+    .heart::after {
+      left: 0;
+      top: -50%;
+    }
+
+    .hint {
+      margin: 0;
+      font-size: 13px;
+      color: #626a78;
+      text-align: center;
+    }
+
+    @keyframes cat-bounce {
+      0% {
+        transform: translateY(0) rotate(0deg) scale(1);
+      }
+
+      38% {
+        transform: translateY(-5px) rotate(-3deg) scale(1.08);
+      }
+
+      100% {
+        transform: translateY(0) rotate(0deg) scale(1);
+      }
+    }
+
+    @keyframes float-heart {
+      0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) rotate(45deg) scale(0.35);
+      }
+
+      18% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0;
+        transform:
+          translate(calc(-50% + var(--x)), calc(-50% + var(--y)))
+          rotate(calc(45deg + var(--rotation)))
+          scale(var(--scale));
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="preview">
+    <section class="keyboard" aria-label="Keyboard animation preview">
+      <div class="composition-bar">
+        <div class="text">nihao<span class="caret"></span></div>
+        <button class="mascot-button" type="button" aria-label="Play cat heart animation">
+          <img class="cat" src="../../%E7%8C%AB.png" alt="">
+        </button>
+      </div>
+    </section>
+    <p class="hint">Click the cat to preview the keyboard tap effect.</p>
+  </main>
+
+  <script>
+    const button = document.querySelector(".mascot-button");
+    const colors = ["#ff5a93", "#ff7aa8", "#ff446f", "#f43f85", "#ff9fbd"];
+    const particles = [
+      [-34, -32, 14, 0, 0.76, 13],
+      [-22, -48, -8, 30, 0.88, 11],
+      [-8, -58, 10, 55, 0.72, 9],
+      [8, -58, -12, 75, 0.8, 10],
+      [24, -46, 16, 95, 0.92, 12],
+      [36, -30, -10, 120, 0.78, 10],
+      [-38, -14, -18, 70, 0.68, 8],
+      [40, -12, 20, 140, 0.7, 8],
+      [-18, -26, 8, 110, 0.62, 7],
+      [18, -26, -8, 155, 0.66, 7],
+      [-6, -42, 22, 170, 0.58, 8],
+      [6, -42, -22, 195, 0.58, 8]
+    ];
+
+    function playHearts() {
+      button.classList.remove("is-playing");
+      button.querySelectorAll(".heart").forEach((heart) => heart.remove());
+      void button.offsetWidth;
+      button.classList.add("is-playing");
+
+      particles.forEach(([x, y, rotation, delay, scale, size], index) => {
+        const heart = document.createElement("span");
+        heart.className = "heart";
+        heart.style.setProperty("--x", `${x}px`);
+        heart.style.setProperty("--y", `${y}px`);
+        heart.style.setProperty("--rotation", `${rotation}deg`);
+        heart.style.setProperty("--delay", `${delay}ms`);
+        heart.style.setProperty("--scale", scale);
+        heart.style.setProperty("--size", `${size}px`);
+        heart.style.setProperty("--duration", `${720 + delay}ms`);
+        heart.style.setProperty("--color", colors[index % colors.length]);
+        button.appendChild(heart);
+        heart.addEventListener("animationend", () => heart.remove(), { once: true });
+      });
+
+      window.setTimeout(() => button.classList.remove("is-playing"), 720);
+    }
+
+    button.addEventListener("click", playHearts);
+    window.setTimeout(playHearts, 400);
+  </script>
+</body>
+</html>

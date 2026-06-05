@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Keyboard Letter Layout Preview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #eef1f5;
+      color: #1f2430;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at top, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.32) 36%, transparent 58%),
+        #eef1f5;
+    }
+
+    .phone {
+      width: min(430px, 100%);
+      padding: 18px 12px 14px;
+      border-radius: 26px;
+      background: #f8f9fb;
+      box-shadow: 0 24px 60px rgba(24, 32, 48, 0.18);
+    }
+
+    .input {
+      min-height: 44px;
+      margin: 0 4px 16px;
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: #ffffff;
+      box-shadow: inset 0 0 0 1px rgba(31, 36, 48, 0.08);
+      font-size: 18px;
+      line-height: 1.25;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .placeholder {
+      color: #8d95a3;
+    }
+
+    .keyboard {
+      display: grid;
+      gap: 8px;
+      padding: 12px 4px 6px;
+      border-radius: 14px;
+      background: #d9dee7;
+      overflow: hidden;
+    }
+
+    .row {
+      display: grid;
+      gap: 6px;
+      min-height: 42px;
+    }
+
+    .row--top {
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+    }
+
+    .row--home {
+      grid-template-columns: 0.5fr repeat(9, minmax(0, 1fr)) 0.5fr;
+    }
+
+    .row--bottom {
+      grid-template-columns: 42px 0.5fr repeat(7, minmax(0, 1fr)) 0.5fr 42px;
+    }
+
+    .row--control {
+      grid-template-columns: 1.35fr 3.55fr 1fr 1.55fr;
+    }
+
+    .spacer {
+      min-width: 0;
+    }
+
+    .key {
+      position: relative;
+      min-width: 0;
+      min-height: 42px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0;
+      background: #ffffff;
+      color: #1f2430;
+      box-shadow: 0 1px 0 rgba(31, 36, 48, 0.32);
+      font: 400 22px/1 inherit;
+      cursor: pointer;
+      overflow: hidden;
+      transition: transform 90ms ease, background-color 90ms ease, box-shadow 90ms ease;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    .key--special {
+      background: #abb3bd;
+    }
+
+    .key--control {
+      font-size: 17px;
+    }
+
+    .key--space {
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .key--language {
+      font-size: 20px;
+    }
+
+    .key.is-active {
+      transform: translateY(1px);
+      box-shadow: 0 0 0 rgba(31, 36, 48, 0);
+      background: #f4f6fa;
+    }
+
+    .key--special.is-active,
+    .key--shift.is-latched {
+      background: #98a1ad;
+    }
+
+    .key__label {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+    }
+
+    .key__icon {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .key__icon-image {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      filter: brightness(0) saturate(100%);
+      user-select: none;
+    }
+
+    .key__icon--shift {
+      inset: 4px;
+    }
+
+    .key__icon--shift .key__icon-image {
+      object-fit: cover;
+      object-position: 50% 18%;
+      filter: none;
+    }
+
+    .key__icon--backspace {
+      inset: 9px 7px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="完整字母键盘预览">
+    <div class="input" id="inputText" aria-live="polite">
+      <span class="placeholder">轻点按键</span>
+    </div>
+
+    <section class="keyboard" aria-label="字母键盘">
+      <div class="row row--top">
+        <button class="key" data-letter="q"><span class="key__label">q</span></button>
+        <button class="key" data-letter="w"><span class="key__label">w</span></button>
+        <button class="key" data-letter="e"><span class="key__label">e</span></button>
+        <button class="key" data-letter="r"><span class="key__label">r</span></button>
+        <button class="key" data-letter="t"><span class="key__label">t</span></button>
+        <button class="key" data-letter="y"><span class="key__label">y</span></button>
+        <button class="key" data-letter="u"><span class="key__label">u</span></button>
+        <button class="key" data-letter="i"><span class="key__label">i</span></button>
+        <button class="key" data-letter="o"><span class="key__label">o</span></button>
+        <button class="key" data-letter="p"><span class="key__label">p</span></button>
+      </div>
+
+      <div class="row row--home">
+        <div class="spacer" aria-hidden="true"></div>
+        <button class="key" data-letter="a"><span class="key__label">a</span></button>
+        <button class="key" data-letter="s"><span class="key__label">s</span></button>
+        <button class="key" data-letter="d"><span class="key__label">d</span></button>
+        <button class="key" data-letter="f"><span class="key__label">f</span></button>
+        <button class="key" data-letter="g"><span class="key__label">g</span></button>
+        <button class="key" data-letter="h"><span class="key__label">h</span></button>
+        <button class="key" data-letter="j"><span class="key__label">j</span></button>
+        <button class="key" data-letter="k"><span class="key__label">k</span></button>
+        <button class="key" data-letter="l"><span class="key__label">l</span></button>
+        <div class="spacer" aria-hidden="true"></div>
+      </div>
+
+      <div class="row row--bottom">
+        <button class="key key--special key--shift" data-action="shift" aria-label="Shift">
+          <span class="key__icon key__icon--shift" aria-hidden="true">
+            <img class="key__icon-image" src="../../ios-icon/小写图标.png" alt="">
+          </span>
+          <span class="sr-only">Shift</span>
+        </button>
+        <div class="spacer" aria-hidden="true"></div>
+        <button class="key" data-letter="z"><span class="key__label">z</span></button>
+        <button class="key" data-letter="x"><span class="key__label">x</span></button>
+        <button class="key" data-letter="c"><span class="key__label">c</span></button>
+        <button class="key" data-letter="v"><span class="key__label">v</span></button>
+        <button class="key" data-letter="b"><span class="key__label">b</span></button>
+        <button class="key" data-letter="n"><span class="key__label">n</span></button>
+        <button class="key" data-letter="m"><span class="key__label">m</span></button>
+        <div class="spacer" aria-hidden="true"></div>
+        <button class="key key--special" data-action="backspace" aria-label="删除">
+          <span class="key__icon key__icon--backspace" aria-hidden="true">
+            <img class="key__icon-image" src="../../ios-icon/icons8-clear-symbol-48.png" alt="">
+          </span>
+          <span class="sr-only">删除</span>
+        </button>
+      </div>
+
+      <div class="row row--control">
+        <button class="key key--special key--control" data-action="mode"><span class="key__label">123</span></button>
+        <button class="key key--space key--control" data-action="space"><span class="key__label">空格</span></button>
+        <button class="key key--special key--control key--language" data-action="language"><span class="key__label" id="languageLabel">英</span></button>
+        <button class="key key--special key--control" data-action="return"><span class="key__label">确认</span></button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const inputText = document.querySelector("#inputText");
+    const languageLabel = document.querySelector("#languageLabel");
+    const letterButtons = Array.from(document.querySelectorAll("[data-letter]"));
+    const shiftButton = document.querySelector("[data-action='shift']");
+    const shiftIconImage = shiftButton.querySelector(".key__icon-image");
+    const buttons = Array.from(document.querySelectorAll(".key"));
+    const placeholderText = "轻点按键";
+
+    let typed = "";
+    let shiftOn = false;
+    let isChineseMode = true;
+
+    function renderInput() {
+      if (!typed) {
+        inputText.innerHTML = `<span class="placeholder">${placeholderText}</span>`;
+        return;
+      }
+
+      inputText.textContent = typed;
+    }
+
+    function renderLetters() {
+      letterButtons.forEach((button) => {
+        const value = button.dataset.letter;
+        button.querySelector(".key__label").textContent = shiftOn ? value.toUpperCase() : value;
+      });
+      shiftIconImage.src = shiftOn ? "../../ios-icon/大写图标.png" : "../../ios-icon/小写图标.png";
+      shiftButton.classList.toggle("is-latched", shiftOn);
+    }
+
+    function renderLanguage() {
+      languageLabel.textContent = isChineseMode ? "英" : "中";
+    }
+
+    function appendLetter(button) {
+      const base = button.dataset.letter ?? "";
+      typed += shiftOn ? base.toUpperCase() : base;
+      if (shiftOn) {
+        shiftOn = false;
+        renderLetters();
+      }
+      renderInput();
+    }
+
+    function handleAction(action, button) {
+      if (button.dataset.letter) {
+        appendLetter(button);
+        return;
+      }
+
+      switch (action) {
+        case "shift":
+          shiftOn = !shiftOn;
+          renderLetters();
+          break;
+        case "backspace":
+          typed = typed.slice(0, -1);
+          renderInput();
+          break;
+        case "space":
+          typed += " ";
+          renderInput();
+          break;
+        case "language":
+          isChineseMode = !isChineseMode;
+          renderLanguage();
+          break;
+        default:
+          break;
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("pointerdown", () => {
+        button.classList.add("is-active");
+      });
+
+      button.addEventListener("pointerup", () => {
+        handleAction(button.dataset.action, button);
+        button.classList.remove("is-active");
+      });
+
+      button.addEventListener("pointerleave", () => {
+        button.classList.remove("is-active");
+      });
+
+      button.addEventListener("pointercancel", () => {
+        button.classList.remove("is-active");
+      });
+    });
+
+    renderInput();
+    renderLetters();
+    renderLanguage();
+  </script>
+</body>
+</html>

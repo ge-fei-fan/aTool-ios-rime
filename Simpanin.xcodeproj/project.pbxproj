@@ -1,0 +1,620 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		111111111111111111111101 /* SimpaninApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111001 /* SimpaninApp.swift */; };
+		111111111111111111111102 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111002 /* HomeView.swift */; };
+		111111111111111111111103 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 111111111111111111111003 /* Assets.xcassets */; };
+		111111111111111111111104 /* KeyboardKit in Frameworks */ = {isa = PBXBuildFile; productRef = 111111111111111111111201 /* KeyboardKit */; };
+		222222222222222222222101 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222001 /* KeyboardViewController.swift */; };
+		222222222222222222222113 /* RimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222123 /* RimeBridge.swift */; };
+		222222222222222222222114 /* RimeInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222124 /* RimeInputEngine.swift */; };
+		444444444444444444444101 /* RimeNativeBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 444444444444444444444002 /* RimeNativeBridge.mm */; };
+		444444444444444444444102 /* RimeShared in Resources */ = {isa = PBXBuildFile; fileRef = 444444444444444444444004 /* RimeShared */; };
+		222222222222222222222102 /* SimpaninKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 222222222222222222222003 /* SimpaninKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		222222222222222222222104 /* rime-frost-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222005 /* rime-frost-LICENSE.txt */; };
+		222222222222222222222109 /* rime-frost-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222009 /* rime-frost-NOTICE.txt */; };
+		333333333333333333333101 /* ios-icon in Resources */ = {isa = PBXBuildFile; fileRef = 333333333333333333333001 /* ios-icon */; };
+		555555555555555555555101 /* NotoSansCJKsc-Regular.otf in Resources */ = {isa = PBXBuildFile; fileRef = 555555555555555555555001 /* NotoSansCJKsc-Regular.otf */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		222222222222222222222060 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 111111111111111111111060 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 222222222222222222222030;
+			remoteInfo = SimpaninKeyboard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		222222222222222222222050 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				222222222222222222222102 /* SimpaninKeyboard.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		111111111111111111111001 /* SimpaninApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpaninApp.swift; sourceTree = "<group>"; };
+		111111111111111111111002 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		111111111111111111111003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		111111111111111111111004 /* Simpanin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Simpanin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		111111111111111111111005 /* Simpanin.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Simpanin.entitlements; sourceTree = "<group>"; };
+		222222222222222222222001 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		222222222222222222222002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		222222222222222222222003 /* SimpaninKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SimpaninKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		222222222222222222222005 /* rime-frost-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ThirdPartyLicenses/rime-frost-LICENSE.txt"; sourceTree = "<group>"; };
+		222222222222222222222006 /* SimpaninKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SimpaninKeyboard.entitlements; sourceTree = "<group>"; };
+		222222222222222222222009 /* rime-frost-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ThirdPartyLicenses/rime-frost-NOTICE.txt"; sourceTree = "<group>"; };
+		222222222222222222222123 /* RimeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeBridge.swift; sourceTree = "<group>"; };
+		222222222222222222222124 /* RimeInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeInputEngine.swift; sourceTree = "<group>"; };
+		444444444444444444444001 /* RimeNativeBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RimeNativeBridge.h; sourceTree = "<group>"; };
+		444444444444444444444002 /* RimeNativeBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RimeNativeBridge.mm; sourceTree = "<group>"; };
+		444444444444444444444003 /* SimpaninKeyboard-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SimpaninKeyboard-Bridging-Header.h"; sourceTree = "<group>"; };
+		444444444444444444444004 /* RimeShared */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeShared; sourceTree = "<group>"; };
+		333333333333333333333001 /* ios-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "ios-icon"; sourceTree = SOURCE_ROOT; };
+		555555555555555555555001 /* NotoSansCJKsc-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Fonts/NotoSansCJKsc-Regular.otf; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		111111111111111111111010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111104 /* KeyboardKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		222222222222222222222010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		111111111111111111111020 = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111021 /* Simpanin */,
+				222222222222222222222021 /* SimpaninKeyboard */,
+				333333333333333333333001 /* ios-icon */,
+				111111111111111111111022 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		111111111111111111111021 /* Simpanin */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111001 /* SimpaninApp.swift */,
+				111111111111111111111002 /* HomeView.swift */,
+				111111111111111111111005 /* Simpanin.entitlements */,
+				111111111111111111111003 /* Assets.xcassets */,
+			);
+			path = Simpanin;
+			sourceTree = "<group>";
+		};
+		111111111111111111111022 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				111111111111111111111004 /* Simpanin.app */,
+				222222222222222222222003 /* SimpaninKeyboard.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		222222222222222222222021 /* SimpaninKeyboard */ = {
+			isa = PBXGroup;
+			children = (
+				222222222222222222222001 /* KeyboardViewController.swift */,
+				222222222222222222222123 /* RimeBridge.swift */,
+				222222222222222222222124 /* RimeInputEngine.swift */,
+				444444444444444444444001 /* RimeNativeBridge.h */,
+				444444444444444444444002 /* RimeNativeBridge.mm */,
+				444444444444444444444003 /* SimpaninKeyboard-Bridging-Header.h */,
+				444444444444444444444004 /* RimeShared */,
+				555555555555555555555001 /* NotoSansCJKsc-Regular.otf */,
+				222222222222222222222002 /* Info.plist */,
+				222222222222222222222006 /* SimpaninKeyboard.entitlements */,
+				222222222222222222222005 /* rime-frost-LICENSE.txt */,
+				222222222222222222222009 /* rime-frost-NOTICE.txt */,
+			);
+			path = SimpaninKeyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		111111111111111111111030 /* Simpanin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 111111111111111111111080 /* Build configuration list for PBXNativeTarget "Simpanin" */;
+			buildPhases = (
+				111111111111111111111040 /* Sources */,
+				111111111111111111111010 /* Frameworks */,
+				111111111111111111111050 /* Resources */,
+				222222222222222222222050 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				222222222222222222222061 /* PBXTargetDependency */,
+			);
+			name = Simpanin;
+			packageProductDependencies = (
+				111111111111111111111201 /* KeyboardKit */,
+			);
+			productName = Simpanin;
+			productReference = 111111111111111111111004 /* Simpanin.app */;
+			productType = "com.apple.product-type.application";
+		};
+		222222222222222222222030 /* SimpaninKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 222222222222222222222080 /* Build configuration list for PBXNativeTarget "SimpaninKeyboard" */;
+			buildPhases = (
+				222222222222222222222040 /* Sources */,
+				222222222222222222222010 /* Frameworks */,
+				222222222222222222222051 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SimpaninKeyboard;
+			packageProductDependencies = (
+				111111111111111111111201 /* KeyboardKit */,
+			);
+			productName = SimpaninKeyboard;
+			productReference = 222222222222222222222003 /* SimpaninKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		111111111111111111111060 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 1540;
+				TargetAttributes = {
+					111111111111111111111030 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+					222222222222222222222030 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+				};
+			};
+			buildConfigurationList = 111111111111111111111070 /* Build configuration list for PBXProject "Simpanin" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 111111111111111111111020;
+			packageReferences = (
+				111111111111111111111200 /* XCRemoteSwiftPackageReference "KeyboardKit" */,
+			);
+			productRefGroup = 111111111111111111111022 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				111111111111111111111030 /* Simpanin */,
+				222222222222222222222030 /* SimpaninKeyboard */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		111111111111111111111050 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111103 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		222222222222222222222051 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				222222222222222222222104 /* rime-frost-LICENSE.txt in Resources */,
+				222222222222222222222109 /* rime-frost-NOTICE.txt in Resources */,
+				555555555555555555555101 /* NotoSansCJKsc-Regular.otf in Resources */,
+				444444444444444444444102 /* RimeShared in Resources */,
+				333333333333333333333101 /* ios-icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		111111111111111111111040 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				111111111111111111111101 /* SimpaninApp.swift in Sources */,
+				111111111111111111111102 /* HomeView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		222222222222222222222040 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				222222222222222222222101 /* KeyboardViewController.swift in Sources */,
+				222222222222222222222113 /* RimeBridge.swift in Sources */,
+				222222222222222222222114 /* RimeInputEngine.swift in Sources */,
+				444444444444444444444101 /* RimeNativeBridge.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		222222222222222222222061 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 222222222222222222222030 /* SimpaninKeyboard */;
+			targetProxy = 222222222222222222222060 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		111111111111111111111071 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		111111111111111111111072 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		111111111111111111111081 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Simpanin/Simpanin.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Take photos to create local cutout images.";
+				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES;}";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save generated cutout images to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose photos to create local cutout images.";
+				INFOPLIST_KEY_CFBundleDisplayName = FITNEX;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.fitnex;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		111111111111111111111082 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Simpanin/Simpanin.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Take photos to create local cutout images.";
+				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES;}";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save generated cutout images to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose photos to create local cutout images.";
+				INFOPLIST_KEY_CFBundleDisplayName = FITNEX;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.fitnex;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		222222222222222222222081 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = SimpaninKeyboard/SimpaninKeyboard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/Rime/include",
+				);
+				INFOPLIST_FILE = SimpaninKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/Rime/lib",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-Wl,-force_load,$(PROJECT_DIR)/Vendor/Rime/lib/librime.a",
+					"-lboost_regex",
+					"-lglog",
+					"-lleveldb",
+					"-lmarisa",
+					"-lopencc",
+					"-lyaml-cpp",
+					"-lc++",
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.fitnex.keyboard2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = SimpaninKeyboard/SimpaninKeyboard-Bridging-Header.h;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		222222222222222222222082 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = SimpaninKeyboard/SimpaninKeyboard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/Rime/include",
+				);
+				INFOPLIST_FILE = SimpaninKeyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Vendor/Rime/lib",
+				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"-Wl,-force_load,$(PROJECT_DIR)/Vendor/Rime/lib/librime.a",
+					"-lboost_regex",
+					"-lglog",
+					"-lleveldb",
+					"-lmarisa",
+					"-lopencc",
+					"-lyaml-cpp",
+					"-lc++",
+					"-lz",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.fitnex.keyboard2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = SimpaninKeyboard/SimpaninKeyboard-Bridging-Header.h;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		111111111111111111111070 /* Build configuration list for PBXProject "Simpanin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111111071 /* Debug */,
+				111111111111111111111072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		111111111111111111111080 /* Build configuration list for PBXNativeTarget "Simpanin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				111111111111111111111081 /* Debug */,
+				111111111111111111111082 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		222222222222222222222080 /* Build configuration list for PBXNativeTarget "SimpaninKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				222222222222222222222081 /* Debug */,
+				222222222222222222222082 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		111111111111111111111200 /* XCRemoteSwiftPackageReference "KeyboardKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/KeyboardKit/KeyboardKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 10.1.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		111111111111111111111201 /* KeyboardKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 111111111111111111111200 /* XCRemoteSwiftPackageReference "KeyboardKit" */;
+			productName = KeyboardKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 111111111111111111111060 /* Project object */;
+}

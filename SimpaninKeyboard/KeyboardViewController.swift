@@ -1,0 +1,3896 @@
+import KeyboardKit
+import SwiftUI
+import UIKit
+
+final class KeyboardViewController: KeyboardInputViewController {
+    private let pinyinState = PinyinKeyboardInputState()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setKeyboardCase(.lowercased)
+        let standardActionHandler = services.actionHandler
+        services.actionHandler = PinyinKeyboardActionHandler(
+            controller: self,
+            standardActionHandler: standardActionHandler,
+            pinyinState: pinyinState
+        )
+    }
+
+    override func viewWillSetupKeyboardView() {
+        applyLockedKeyboardCaseDeferred()
+        setupKeyboardView { [pinyinState] controller in
+            PinyinKeyboardView(
+                keyboardContext: controller.state.keyboardContext,
+                services: controller.services,
+                pinyinState: pinyinState,
+                hasFullAccess: controller.hasFullAccess,
+                insertText: { [weak controller] text in
+                    controller?.textDocumentProxy.insertText(text)
+                },
+                dismissKeyboard: { [weak controller] in
+                    controller?.dismissKeyboard()
+                }
+            )
+        }
+        pinyinState.scheduleDelayedRimeInputEngineReload()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        pinyinState.shutdownRimeInputEngine()
+    }
+
+    override func textDidChange(_ textInput: UITextInput?) {
+        super.textDidChange(textInput)
+        applyLockedKeyboardCaseDeferred()
+    }
+
+    private func applyLockedKeyboardCase() {
+        setKeyboardCase(pinyinState.isUppercaseLocked ? .uppercased : .lowercased)
+    }
+
+    private func applyLockedKeyboardCaseDeferred() {
+        applyLockedKeyboardCase()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyLockedKeyboardCase()
+        }
+    }
+}
+
+private enum PinyinKeyboardMetrics {
+    static let candidateToolbarHeight: CGFloat = 77
+    static let quickFillAddBarHeight: CGFloat = 106
+    static let compositionBarHeight: CGFloat = 30
+    static let candidateInputTopPadding: CGFloat = 4
+    static let compositionCandidateSpacing: CGFloat = 7
+    static let expandedCandidateOverlayTopOffset: CGFloat = candidateInputTopPadding + compositionBarHeight + compositionCandidateSpacing
+    static let candidateExpandHitWidth: CGFloat = 48
+    static let candidateExpandHitHeight: CGFloat = 44
+    static let candidateToggleHitAreaDebugOpacity: Double = 0.35
+    static let expandedCandidateMinHitHeight: CGFloat = 44
+    static let expandedCandidateVerticalPadding: CGFloat = 10
+    static let utilityIconPointSize: CGFloat = 24
+    static let quickFillPanelAnimationDuration: TimeInterval = 0.22
+}
+
+private enum PinyinCloudCandidateStatus: Equatable {
+    case idle
+    case loading
+    case success
+    case failed
+    case unavailable
+}
+
+private struct RimeUserDataPreparation {
+    let sharedDataURL: URL
+    let userDataURL: URL
+    let deployIfNeeded: Bool
+    let deploymentMarker: RimeDeploymentMarker?
+    let deploymentMarkerURL: URL?
+}
+
+private struct RimeSharedManifest: Codable, Equatable {
+    struct FileEntry: Codable, Equatable {
+        let path: String
+        let sha256: String
+        let bytes: Int
+    }
+
+    let tag: String
+    let sourceCommit: String
+    let baseAssetName: String
+    let baseAssetSHA256: String
+    let grammarAssetName: String?
+    let grammarAssetSHA256: String?
+    let schemaID: String
+    let files: [FileEntry]
+}
+
+private struct RimeManagedDataInstallation {
+    let didUpdateResources: Bool
+    let manifest: RimeSharedManifest
+}
+
+private struct RimeDeploymentMarker: Codable, Equatable {
+    let schemaID: String
+    let tag: String
+    let sourceCommit: String
+    let fileCount: Int
+
+    init(manifest: RimeSharedManifest) {
+        schemaID = manifest.schemaID
+        tag = manifest.tag
+        sourceCommit = manifest.sourceCommit
+        fileCount = manifest.files.count
+    }
+}
+
+private enum RimeDataPreparationError: LocalizedError {
+    case bundledSharedDataMissing
+    case writableUserDataUnavailable([String])
+    case createUserDataDirectoryFailed(URL, Error)
+    case manifestReadFailed(URL, Error)
+    case manifestDecodeFailed(URL, Error)
+    case sourceFileMissing(String)
+    case copyFileFailed(String, Error)
+    case writeInstalledManifestFailed(URL, Error)
+    case prebuiltDeploymentMissing(schemaID: String)
+    case removeDeployedBuildFailed(URL, Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .bundledSharedDataMissing:
+            return "Rime启用失败：应用包内缺少 RimeShared 资源目录"
+        case .writableUserDataUnavailable(let failures):
+            let failureSummary = failures.isEmpty ? "未找到候选目录" : failures.joined(separator: "；")
+            return "Rime启用失败：无法获取可写数据目录（\(failureSummary)）"
+        case .createUserDataDirectoryFailed(let url, let error):
+            return "Rime启用失败：无法创建用户数据目录 \(url.lastPathComponent)：\(error.localizedDescription)"
+        case .manifestReadFailed(let url, let error):
+            return "Rime启用失败：无法读取资源清单 \(url.lastPathComponent)：\(error.localizedDescription)"
+        case .manifestDecodeFailed(let url, let error):
+            return "Rime启用失败：资源清单格式错误 \(url.lastPathComponent)：\(error.localizedDescription)"
+        case .sourceFileMissing(let path):
+            return "Rime启用失败：应用包内缺少资源文件 \(path)"
+        case .copyFileFailed(let path, let error):
+            return "Rime启用失败：复制资源文件 \(path) 失败：\(error.localizedDescription)"
+        case .writeInstalledManifestFailed(let url, let error):
+            return "Rime启用失败：无法写入安装清单 \(url.lastPathComponent)：\(error.localizedDescription)"
+        case .prebuiltDeploymentMissing(let schemaID):
+            return "Rime启用失败：缺少预编译部署文件（\(schemaID)）。为避免键盘扩展内首次部署导致闪退，已跳过 Rime 初始化；请先把 build/*.bin 部署产物打包进 RimeShared 或由主 App 预部署。"
+        case .removeDeployedBuildFailed(let url, let error):
+            return "Rime启用失败：无法清理旧部署目录 \(url.lastPathComponent)：\(error.localizedDescription)"
+        }
+    }
+}
+
+private final class PinyinKeyboardInputState: ObservableObject {
+    private static let candidateRefreshDelay: TimeInterval = 0.012
+    private static let cloudCandidateRefreshDelay: TimeInterval = 0.22
+    private static let rimeStartupDelay: TimeInterval = 0.85
+    private static let cloudCandidateDefaultBaseURL = "http://192.168.2.88:11434"
+    private static let cloudCandidateDefaultModel = "qwen3:0.6b"
+    private static let sharedDefaultsSuiteName = "group.com.local.fitnex"
+    private static let quickFillItemsDefaultsKey = "quickFill.items"
+    private static let rimeSharedManifestName = "rime-shared-manifest.json"
+    private static let installedRimeSharedManifestName = ".simpanin-rime-shared-manifest.json"
+    private static let installedRimeDeploymentMarkerName = ".simpanin-rime-deploy-marker.json"
+    private static let keyboardDiagnosticLogQueue = DispatchQueue(label: "com.local.simpanin.keyboard.diagnostic-log")
+    private static let keyboardDiagnosticLogChunkFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd-HH"
+        return formatter
+    }()
+    private static let keyboardDiagnosticLogDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private var engine: any KeyboardInputEngine = RimeInputEngine()
+    private let rimeInitializationQueue = DispatchQueue(label: "com.local.simpanin.keyboard.rime-initialization", qos: .userInitiated)
+    private var rimeInitializationWorkItem: DispatchWorkItem?
+    private var rimeInitializationGeneration = 0
+    private var isRimeInitializationInProgress = false
+    private let candidateQueue = DispatchQueue(label: "com.local.simpanin.keyboard.candidates", qos: .userInitiated)
+    private var candidateRefreshWorkItem: DispatchWorkItem?
+    private var candidateRefreshGeneration = 0
+    private var appliedCandidateGeneration = 0
+    private var cloudCandidateRefreshWorkItem: DispatchWorkItem?
+    private var cloudCandidateTask: URLSessionDataTask?
+    private var activeCloudCandidateRequestID = 0
+    private var hasFullAccessForCloudCandidate = false
+
+    @Published private(set) var displayText = ""
+    @Published private(set) var rawPinyinText = ""
+    @Published private(set) var displayCursorOffset = 0
+    @Published private(set) var hasComposition = false
+    @Published private(set) var candidates: [KeyboardInputCandidate] = []
+    @Published private(set) var candidateScrollResetToken = 0
+    @Published private(set) var isCandidateRefreshPending = false
+    @Published private(set) var isUsingRimeEngine = false
+    @Published private(set) var inputEngineFailureText: String?
+    @Published private(set) var cloudCandidateText = ""
+    @Published private(set) var cloudCandidateStatus: PinyinCloudCandidateStatus = .idle
+    @Published var isChineseInputEnabled = true
+    @Published var isCandidatePageVisible = false
+    @Published var isUppercaseLocked = false
+    @Published var isQuickFillPanelVisible = false
+    @Published var isQuickFillAddInputVisible = false
+    @Published var isSpaceTrackpadActive = false
+    @Published var spaceTrackpadPreviewOffset = 0
+    @Published var quickFillItems: [String] = []
+    @Published var quickFillDraftText = ""
+    @Published var quickFillDraftCursorOffset = 0
+    @Published var isTranslationPanelVisible = false
+    @Published var translationText = ""
+    @Published var translationStatusText = ""
+    private var quickFillEditingOriginalText: String?
+    private var translationTask: URLSessionDataTask?
+    private var translationStreamDelegate: OllamaTranslationStreamDelegate?
+    private var activeTranslationRequestID = 0
+
+    private var sharedDefaults: UserDefaults? {
+        UserDefaults(suiteName: Self.sharedDefaultsSuiteName)
+    }
+
+    deinit {
+        rimeInitializationGeneration += 1
+        rimeInitializationWorkItem?.cancel()
+        candidateRefreshWorkItem?.cancel()
+        cloudCandidateRefreshWorkItem?.cancel()
+        cancelCloudCandidateRequest(clearText: false)
+        cancelTranslationRequest()
+        // Keep the process-wide Rime runtime alive for the extension process.
+        // iOS may recreate the controller during keyboard switches; native
+        // teardown here can race with a new controller's initialization.
+    }
+
+    init() {
+        reloadQuickFillItems()
+    }
+
+    func scheduleDelayedRimeInputEngineReload() {
+        guard !engine.isUsingRime, !isRimeInitializationInProgress else {
+            updatePublishedEngineState()
+            return
+        }
+
+        rimeInitializationGeneration += 1
+        let generation = rimeInitializationGeneration
+        rimeInitializationWorkItem?.cancel()
+        Self.logInputEngineInfo("rime delayed startup scheduled delay=\(Self.rimeStartupDelay)")
+
+        let workItem = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.rimeInitializationGeneration == generation,
+                      !self.engine.isUsingRime,
+                      !self.isRimeInitializationInProgress else {
+                    return
+                }
+                self.reloadRimeInputEngine()
+            }
+        }
+        rimeInitializationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.rimeStartupDelay, execute: workItem)
+    }
+
+    func reloadRimeInputEngine() {
+        guard !engine.isUsingRime else {
+            updatePublishedEngineState()
+            return
+        }
+
+        guard !isRimeInitializationInProgress else {
+            updatePublishedEngineState()
+            return
+        }
+
+        let previousWasUsingRime = engine.isUsingRime
+        let currentFailureText = engine.failureText ?? "<none>"
+        rimeInitializationGeneration += 1
+        let generation = rimeInitializationGeneration
+        isRimeInitializationInProgress = true
+        rimeInitializationWorkItem?.cancel()
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        cancelCloudCandidateRequest(clearText: true)
+        engine.clearComposition()
+        refreshPublishedComposition()
+        Self.logInputEngineInfo(
+            "rime reload scheduled previousWasUsingRime=\(previousWasUsingRime), previousFailure=\(currentFailureText)"
+        )
+
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            guard let self, !workItem.isCancelled else { return }
+            let preparedEngine = self.makeRimeInputEngine()
+            guard !workItem.isCancelled else { return }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.rimeInitializationGeneration == generation,
+                      !workItem.isCancelled else {
+                    return
+                }
+                self.rimeInitializationWorkItem = nil
+                self.isRimeInitializationInProgress = false
+                self.engine = preparedEngine
+                self.resetCandidateScrollPosition()
+                self.hideCandidatePageIfNeeded()
+                self.refreshPublishedComposition()
+                Self.logInputEngineInfo(
+                    "rime reload finished previousWasUsingRime=\(previousWasUsingRime), isUsingRime=\(self.engine.isUsingRime), previousFailure=\(currentFailureText)"
+                )
+                self.scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
+            }
+        }
+        rimeInitializationWorkItem = workItem
+        rimeInitializationQueue.async(execute: workItem)
+    }
+
+    private func makeRimeInputEngine() -> any KeyboardInputEngine {
+        var rimeEngine = RimeInputEngine()
+        do {
+            let preparedData = try prepareRimeUserData()
+            rimeEngine.initializeRimeIfPossible(
+                sharedDataURL: preparedData.sharedDataURL,
+                userDataURL: preparedData.userDataURL,
+                deployIfNeeded: preparedData.deployIfNeeded
+            )
+            if preparedData.deployIfNeeded,
+               rimeEngine.isUsingRime,
+               let deploymentMarker = preparedData.deploymentMarker,
+               let deploymentMarkerURL = preparedData.deploymentMarkerURL {
+                do {
+                    try Self.writeRimeDeploymentMarker(deploymentMarker, to: deploymentMarkerURL)
+                } catch {
+                    Self.logInputEngineInfo("failed to write Rime deployment marker: \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            rimeEngine.setPreparationFailure(error.localizedDescription)
+        }
+        return rimeEngine
+    }
+
+    func shutdownRimeInputEngine() {
+        rimeInitializationGeneration += 1
+        rimeInitializationWorkItem?.cancel()
+        rimeInitializationWorkItem = nil
+        isRimeInitializationInProgress = false
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        cancelCloudCandidateRequest(clearText: true)
+        hideCandidatePageIfNeeded()
+        setTranslationPanelVisible(false)
+
+        // Do not clear or shutdown the process-wide Rime session while the
+        // keyboard extension is disappearing. iOS can call this during input
+        // mode switches while an async Rime initialization/candidate refresh is
+        // still winding down. Touching librime during that transition can race
+        // with the next keyboard instance and make the extension exit, which
+        // appears to users as a brief flash back to the previous keyboard.
+        displayText = ""
+        rawPinyinText = ""
+        displayCursorOffset = 0
+        hasComposition = false
+        candidates = []
+        isCandidateRefreshPending = false
+        cloudCandidateText = ""
+        cloudCandidateStatus = .idle
+    }
+
+    private var bundledRimeSharedDataURL: URL? {
+        Bundle(for: KeyboardViewController.self).url(forResource: "RimeShared", withExtension: nil)
+            ?? Bundle.main.url(forResource: "RimeShared", withExtension: nil)
+    }
+
+    private func writableRimeUserDataURL() throws -> URL {
+        let fileManager = FileManager.default
+        var candidateBaseURLs: [(label: String, url: URL)] = []
+        if let appGroupURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: Self.sharedDefaultsSuiteName) {
+            candidateBaseURLs.append(("App Group", appGroupURL))
+        }
+        if let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            candidateBaseURLs.append(("Application Support", applicationSupportURL.appendingPathComponent("Simpanin", isDirectory: true)))
+        }
+        if let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+            candidateBaseURLs.append(("Documents", documentsURL.appendingPathComponent("Simpanin", isDirectory: true)))
+        }
+        if let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            candidateBaseURLs.append(("Caches", cachesURL.appendingPathComponent("Simpanin", isDirectory: true)))
+        }
+        candidateBaseURLs.append(("Temporary", fileManager.temporaryDirectory.appendingPathComponent("Simpanin", isDirectory: true)))
+
+        var failures: [String] = []
+        for candidate in candidateBaseURLs {
+            let userDataURL = candidate.url.appendingPathComponent("RimeUser", isDirectory: true)
+            do {
+                try fileManager.createDirectory(at: userDataURL, withIntermediateDirectories: true)
+                try Self.verifyDirectoryIsWritable(userDataURL, fileManager: fileManager)
+                return userDataURL
+            } catch {
+                failures.append("\(candidate.label): \(userDataURL.path) - \(error.localizedDescription)")
+            }
+        }
+
+        throw RimeDataPreparationError.writableUserDataUnavailable(failures)
+    }
+
+    private static func verifyDirectoryIsWritable(_ directoryURL: URL, fileManager: FileManager) throws {
+        let testFileURL = directoryURL.appendingPathComponent(".simpanin-write-test-\(UUID().uuidString)")
+        defer { try? fileManager.removeItem(at: testFileURL) }
+        try Data().write(to: testFileURL, options: .atomic)
+    }
+
+    private func prepareRimeUserData() throws -> RimeUserDataPreparation {
+        guard let bundledRimeSharedDataURL else {
+            throw RimeDataPreparationError.bundledSharedDataMissing
+        }
+        let userDataURL = try writableRimeUserDataURL()
+
+        let manifestURL = bundledRimeSharedDataURL.appendingPathComponent(Self.rimeSharedManifestName)
+        let manifestData: Data
+        do {
+            manifestData = try Data(contentsOf: manifestURL)
+        } catch {
+            throw RimeDataPreparationError.manifestReadFailed(manifestURL, error)
+        }
+        let manifest: RimeSharedManifest
+        do {
+            manifest = try JSONDecoder().decode(RimeSharedManifest.self, from: manifestData)
+        } catch {
+            throw RimeDataPreparationError.manifestDecodeFailed(manifestURL, error)
+        }
+
+        let deploymentMarker = RimeDeploymentMarker(manifest: manifest)
+        let deploymentMarkerURL = userDataURL.appendingPathComponent(Self.installedRimeDeploymentMarkerName)
+        let hasBundledBuild = Self.rimeBuildIsInstalled(in: bundledRimeSharedDataURL, schemaID: manifest.schemaID)
+        let hasUserBuild = Self.rimeBuildIsInstalled(in: userDataURL, schemaID: manifest.schemaID)
+        let hasCurrentBuild = hasBundledBuild || hasUserBuild
+        let hasCurrentDeploymentMarker = Self.installedRimeDeploymentMarker(at: deploymentMarkerURL) == deploymentMarker
+        Self.logInputEngineInfo(
+            "rime bundled build detail: \(Self.rimeBuildDiagnosticSummary(in: bundledRimeSharedDataURL, schemaID: manifest.schemaID))"
+        )
+        Self.logInputEngineInfo(
+            "rime user build detail: \(Self.rimeBuildDiagnosticSummary(in: userDataURL, schemaID: manifest.schemaID))"
+        )
+        Self.logInputEngineInfo(
+            "rime data prepared bundledShared=true, hasBundledBuild=\(hasBundledBuild), hasUserBuild=\(hasUserBuild), hasBuild=\(hasCurrentBuild), hasMarker=\(hasCurrentDeploymentMarker), deployInKeyboard=false"
+        )
+
+        // Do not run librime deployment inside the keyboard extension. The
+        // extension has a very small launch-time/memory budget and users have
+        // observed keyboard switching briefly shows our keyboard, then exits
+        // about one second later when first deployment is attempted. Only allow
+        // initialization when a deployed build already exists; otherwise surface
+        // a diagnostic in the candidate/composition bar instead of crashing.
+        guard hasCurrentBuild else {
+            throw RimeDataPreparationError.prebuiltDeploymentMissing(schemaID: manifest.schemaID)
+        }
+
+        return RimeUserDataPreparation(
+            sharedDataURL: bundledRimeSharedDataURL,
+            userDataURL: userDataURL,
+            deployIfNeeded: false,
+            deploymentMarker: deploymentMarker,
+            deploymentMarkerURL: deploymentMarkerURL
+        )
+    }
+
+    private func installManagedRimeSharedData(from sourceURL: URL, to userDataURL: URL) throws -> RimeManagedDataInstallation {
+        let fileManager = FileManager.default
+        let manifestURL = sourceURL.appendingPathComponent(Self.rimeSharedManifestName)
+        let manifestData: Data
+        do {
+            manifestData = try Data(contentsOf: manifestURL)
+        } catch {
+            throw RimeDataPreparationError.manifestReadFailed(manifestURL, error)
+        }
+        let manifest: RimeSharedManifest
+        do {
+            manifest = try JSONDecoder().decode(RimeSharedManifest.self, from: manifestData)
+        } catch {
+            throw RimeDataPreparationError.manifestDecodeFailed(manifestURL, error)
+        }
+        let installedManifestURL = userDataURL.appendingPathComponent(Self.installedRimeSharedManifestName)
+        let installedManifest: RimeSharedManifest?
+        if let installedManifestData = try? Data(contentsOf: installedManifestURL) {
+            installedManifest = try? JSONDecoder().decode(RimeSharedManifest.self, from: installedManifestData)
+        } else {
+            installedManifest = nil
+        }
+
+        let isCurrentManifestInstalled = installedManifest == manifest
+        let hasAllManagedFiles = manifest.files.allSatisfy { entry in
+            Self.managedRimeFileIsInstalled(
+                at: userDataURL.appendingPathComponent(entry.path),
+                expectedByteCount: entry.bytes
+            )
+        }
+        guard !isCurrentManifestInstalled || !hasAllManagedFiles else {
+            return RimeManagedDataInstallation(didUpdateResources: false, manifest: manifest)
+        }
+
+        if let installedManifest {
+            for entry in installedManifest.files {
+                let targetURL = userDataURL.appendingPathComponent(entry.path)
+                if fileManager.fileExists(atPath: targetURL.path) {
+                    try? fileManager.removeItem(at: targetURL)
+                }
+            }
+        }
+
+        for entry in manifest.files {
+            let sourceFileURL = sourceURL.appendingPathComponent(entry.path)
+            let targetFileURL = userDataURL.appendingPathComponent(entry.path)
+            guard fileManager.fileExists(atPath: sourceFileURL.path) else {
+                throw RimeDataPreparationError.sourceFileMissing(entry.path)
+            }
+            if Self.managedRimeFileIsInstalled(at: targetFileURL, expectedByteCount: entry.bytes) {
+                continue
+            }
+            let parentURL = targetFileURL.deletingLastPathComponent()
+            do {
+                try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
+                if fileManager.fileExists(atPath: targetFileURL.path) {
+                    try fileManager.removeItem(at: targetFileURL)
+                }
+                try fileManager.copyItem(at: sourceFileURL, to: targetFileURL)
+            } catch {
+                throw RimeDataPreparationError.copyFileFailed(entry.path, error)
+            }
+        }
+
+        do {
+            try manifestData.write(to: installedManifestURL, options: .atomic)
+        } catch {
+            throw RimeDataPreparationError.writeInstalledManifestFailed(installedManifestURL, error)
+        }
+        return RimeManagedDataInstallation(didUpdateResources: true, manifest: manifest)
+    }
+
+    private static func managedRimeFileIsInstalled(at url: URL, expectedByteCount: Int) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let fileSize = attributes[.size] as? NSNumber else {
+            return false
+        }
+        return fileSize.intValue == expectedByteCount
+    }
+
+    private static func rimeBuildIsInstalled(in baseURL: URL, schemaID: String) -> Bool {
+        rimeRequiredBuildPaths(schemaID: schemaID).allSatisfy { path in
+            FileManager.default.fileExists(atPath: baseURL.appendingPathComponent(path).path)
+        }
+    }
+
+    private static func rimeRequiredBuildPaths(schemaID: String) -> [String] {
+        let requiredBuildPaths = [
+            "build/\(schemaID).schema.yaml",
+            "build/\(schemaID).prism.bin",
+            "build/\(schemaID).table.bin"
+        ]
+        return requiredBuildPaths
+    }
+
+    private static func rimeBuildDiagnosticSummary(in baseURL: URL, schemaID: String) -> String {
+        rimeRequiredBuildPaths(schemaID: schemaID).map { relativePath in
+            let url = baseURL.appendingPathComponent(relativePath)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let fileSize = attributes[.size] as? NSNumber else {
+                return "\(relativePath)=missing"
+            }
+            return "\(relativePath)=\(fileSize.intValue)B"
+        }.joined(separator: ", ")
+    }
+
+    private static func installedRimeDeploymentMarker(at url: URL) -> RimeDeploymentMarker? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(RimeDeploymentMarker.self, from: data)
+    }
+
+    private static func writeRimeDeploymentMarker(_ marker: RimeDeploymentMarker, to url: URL) throws {
+        let data = try JSONEncoder().encode(marker)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func removeDeployedRimeBuild(in userDataURL: URL) throws {
+        let fileManager = FileManager.default
+        let buildURL = userDataURL.appendingPathComponent("build", isDirectory: true)
+        do {
+            if fileManager.fileExists(atPath: buildURL.path) {
+                try fileManager.removeItem(at: buildURL)
+            }
+        } catch {
+            throw RimeDataPreparationError.removeDeployedBuildFailed(buildURL, error)
+        }
+        let deploymentMarkerURL = userDataURL.appendingPathComponent(Self.installedRimeDeploymentMarkerName)
+        try? fileManager.removeItem(at: deploymentMarkerURL)
+    }
+
+    func insertLetter(_ letter: String) {
+        hideQuickFillPanelIfNeeded()
+        engine.insertLetter(letter)
+        resetCandidateScrollPosition()
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
+    }
+
+    func deleteBackward() -> Bool {
+        let didDelete = engine.deleteBackward()
+        if didDelete {
+            resetCandidateScrollPosition()
+        }
+        refreshPublishedComposition()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: !engine.hasComposition)
+        return didDelete
+    }
+
+    func select(_ candidate: KeyboardInputCandidate) -> String? {
+        guard !isCandidateRefreshPending else { return nil }
+        let committedText = engine.select(candidate)
+        refreshPublishedComposition()
+        if committedText != nil {
+            hideCandidatePageIfNeeded()
+        }
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
+        return committedText
+    }
+
+    func commitCloudCandidate() -> String? {
+        let text = cloudCandidateText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasComposition, cloudCandidateStatus == .success, !text.isEmpty else { return nil }
+        engine.clearComposition()
+        refreshPublishedComposition()
+        clearCloudCandidate()
+        hideCandidatePageIfNeeded()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
+        return text
+    }
+
+    func commitCompositionAsText() -> String? {
+        let text = engine.commitCompositionAsText()
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
+        return text
+    }
+
+    func setCloudCandidateFullAccess(_ hasFullAccess: Bool) {
+        guard hasFullAccessForCloudCandidate != hasFullAccess else { return }
+        hasFullAccessForCloudCandidate = hasFullAccess
+        scheduleCloudCandidateRefresh()
+    }
+
+    func toggleChineseInput() {
+        isChineseInputEnabled.toggle()
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
+    }
+
+    func firstFreshCandidateForCommit() -> KeyboardInputCandidate? {
+        guard isChineseInputEnabled else { return nil }
+        if isCandidateRefreshPending || appliedCandidateGeneration != candidateRefreshGeneration {
+            candidateRefreshWorkItem?.cancel()
+            candidateRefreshWorkItem = nil
+            candidateRefreshGeneration += 1
+            let generation = candidateRefreshGeneration
+            applyCandidateRefreshResult(engine.candidates, generation: generation)
+        }
+        return candidates.first
+    }
+
+    func firstFreshCompositionCandidateForCommit() -> KeyboardInputCandidate? {
+        guard hasComposition else { return nil }
+        return firstFreshCandidateForCommit()
+    }
+
+    func toggleQuickFillPanel() {
+        reloadQuickFillItems()
+        setTranslationPanelVisible(false)
+        if isQuickFillAddInputVisible {
+            returnToQuickFillPanel()
+            return
+        }
+        isQuickFillAddInputVisible = false
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        isQuickFillPanelVisible.toggle()
+        if isQuickFillPanelVisible {
+            hideCandidatePageIfNeeded()
+        }
+    }
+
+    func setQuickFillPanelVisible(_ visible: Bool) {
+        if visible {
+            reloadQuickFillItems()
+            setTranslationPanelVisible(false)
+            hideCandidatePageIfNeeded()
+        } else {
+            isQuickFillAddInputVisible = false
+            quickFillDraftText = ""
+            quickFillDraftCursorOffset = 0
+        }
+        if isQuickFillPanelVisible != visible {
+            isQuickFillPanelVisible = visible
+        }
+    }
+
+    func showQuickFillAddInput() {
+        setTranslationPanelVisible(false)
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        quickFillEditingOriginalText = nil
+        isQuickFillAddInputVisible = true
+        isQuickFillPanelVisible = false
+        hideCandidatePageIfNeeded()
+    }
+
+    func closeQuickFillAddInput() {
+        isQuickFillAddInputVisible = false
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        quickFillEditingOriginalText = nil
+    }
+
+    func returnToQuickFillPanel() {
+        reloadQuickFillItems()
+        isQuickFillAddInputVisible = false
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        quickFillEditingOriginalText = nil
+        isQuickFillPanelVisible = true
+        hideCandidatePageIfNeeded()
+    }
+
+    func beginEditingQuickFillItem(_ item: String) {
+        quickFillEditingOriginalText = item
+        quickFillDraftText = item
+        quickFillDraftCursorOffset = item.count
+        isQuickFillAddInputVisible = true
+        isQuickFillPanelVisible = false
+        hideCandidatePageIfNeeded()
+    }
+
+    func appendQuickFillDraftText(_ text: String) {
+        guard isQuickFillAddInputVisible, !text.isEmpty else { return }
+        let insertionOffset = clampedQuickFillDraftCursorOffset
+        let insertionIndex = quickFillDraftText.index(quickFillDraftText.startIndex, offsetBy: insertionOffset)
+        quickFillDraftText.insert(contentsOf: text, at: insertionIndex)
+        quickFillDraftCursorOffset = insertionOffset + text.count
+    }
+
+    func deleteQuickFillDraftBackward() -> Bool {
+        guard isQuickFillAddInputVisible,
+              !quickFillDraftText.isEmpty,
+              clampedQuickFillDraftCursorOffset > 0 else { return false }
+        let cursorOffset = clampedQuickFillDraftCursorOffset
+        let endIndex = quickFillDraftText.index(quickFillDraftText.startIndex, offsetBy: cursorOffset)
+        let deleteIndex = quickFillDraftText.index(before: endIndex)
+        quickFillDraftText.remove(at: deleteIndex)
+        quickFillDraftCursorOffset = cursorOffset - 1
+        return true
+    }
+
+    func moveQuickFillDraftCursor(by offset: Int) {
+        guard isQuickFillAddInputVisible, offset != 0 else { return }
+        quickFillDraftCursorOffset = max(0, min(quickFillDraftText.count, clampedQuickFillDraftCursorOffset + offset))
+    }
+
+    func setQuickFillDraftCursorOffset(_ offset: Int) {
+        guard isQuickFillAddInputVisible else { return }
+        quickFillDraftCursorOffset = max(0, min(quickFillDraftText.count, offset))
+    }
+
+    func moveQuickFillDraftCursorToEnd() {
+        quickFillDraftCursorOffset = quickFillDraftText.count
+    }
+
+    func saveQuickFillDraft() {
+        if hasComposition, let text = commitCompositionAsText() {
+            appendQuickFillDraftText(text)
+        }
+        let text = quickFillDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let editingOriginalText = quickFillEditingOriginalText
+        var items = quickFillItems.filter { item in
+            item != text && item != editingOriginalText
+        }
+        if let editingOriginalText,
+           let originalIndex = quickFillItems.firstIndex(of: editingOriginalText) {
+            items.insert(text, at: min(originalIndex, items.count))
+        } else {
+            items.insert(text, at: 0)
+        }
+        persistQuickFillItems(items)
+        returnToQuickFillPanel()
+    }
+
+    func deleteQuickFillItem(_ item: String) {
+        let items = quickFillItems.filter { $0 != item }
+        persistQuickFillItems(items)
+    }
+
+    func reloadQuickFillItems() {
+        sharedDefaults?.synchronize()
+        quickFillItems = sharedDefaults?.stringArray(forKey: Self.quickFillItemsDefaultsKey) ?? []
+    }
+
+    func clearAssociationSuggestions() {
+        engine.clearAssociationContext()
+        candidateRefreshWorkItem?.cancel()
+        candidateRefreshWorkItem = nil
+        candidateRefreshGeneration += 1
+        appliedCandidateGeneration = candidateRefreshGeneration
+        setCandidateRefreshPending(false)
+        if !candidates.isEmpty {
+            candidates = []
+        }
+        hideCandidatePageIfNeeded()
+        clearCloudCandidate()
+    }
+
+    func updateSpaceTrackpadPreview(offset: Int) {
+        if !isSpaceTrackpadActive {
+            isSpaceTrackpadActive = true
+        }
+        if spaceTrackpadPreviewOffset != offset {
+            spaceTrackpadPreviewOffset = offset
+        }
+    }
+
+    func endSpaceTrackpadPreview() {
+        if isSpaceTrackpadActive {
+            isSpaceTrackpadActive = false
+        }
+        if spaceTrackpadPreviewOffset != 0 {
+            spaceTrackpadPreviewOffset = 0
+        }
+    }
+
+    func openTranslationPanel(hasFullAccess: Bool) {
+        isQuickFillPanelVisible = false
+        isQuickFillAddInputVisible = false
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        quickFillEditingOriginalText = nil
+        hideCandidatePageIfNeeded()
+        setTranslationPanelVisible(true)
+        startClipboardTranslation(hasFullAccess: hasFullAccess)
+    }
+
+    func setTranslationPanelVisible(_ visible: Bool) {
+        guard isTranslationPanelVisible != visible else { return }
+        isTranslationPanelVisible = visible
+        if visible {
+            isQuickFillPanelVisible = false
+            isQuickFillAddInputVisible = false
+            hideCandidatePageIfNeeded()
+        } else {
+            cancelTranslationRequest()
+        }
+    }
+
+    private func startClipboardTranslation(hasFullAccess: Bool) {
+        cancelTranslationRequest()
+        activeTranslationRequestID += 1
+        let requestID = activeTranslationRequestID
+
+        guard hasFullAccess else {
+            translationText = "请在系统设置中为键盘开启“允许完全访问”，用于读取粘贴板并访问翻译服务。"
+            translationStatusText = "需要权限"
+            return
+        }
+
+        let sourceText = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !sourceText.isEmpty else {
+            translationText = "粘贴板暂无可翻译文本。"
+            translationStatusText = "空粘贴板"
+            return
+        }
+
+        translationText = ""
+        translationStatusText = "翻译中…"
+        requestStreamingTranslation(for: sourceText, requestID: requestID)
+    }
+
+    private func requestStreamingTranslation(for text: String, requestID: Int) {
+        let storedBaseURL = sharedDefaults?.string(forKey: "translate.baseURL") ?? "http://192.168.2.88:11434"
+        let storedModel = sharedDefaults?.string(forKey: "translate.model") ?? "transgemma4b"
+        let baseURL = storedBaseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = storedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !baseURL.isEmpty, let url = URL(string: "\(baseURL)/api/generate") else {
+            translationText = "翻译服务地址无效，请在 App 的设置中检查服务地址。"
+            translationStatusText = "配置错误"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+
+        let prompt = """
+        请自动识别以下文本的语言，并将内容翻译成简体中文。
+        如果文本已经是中文，请保持中文原文，不要翻译成其他语言，也不要润色改写。
+        只返回译文，不要返回解释、标签、原文或额外说明。
+
+        \(text)
+        """
+        let body: [String: Any] = [
+            "model": model.isEmpty ? "transgemma4b" : model,
+            "prompt": prompt,
+            "stream": true
+        ]
+        guard JSONSerialization.isValidJSONObject(body),
+              let data = try? JSONSerialization.data(withJSONObject: body) else {
+            translationText = "翻译请求构造失败。"
+            translationStatusText = "请求错误"
+            return
+        }
+        request.httpBody = data
+
+        var accumulated = ""
+        let delegate = OllamaTranslationStreamDelegate(
+            onToken: { [weak self] (token: String) in
+                DispatchQueue.main.async {
+                    guard let self, self.activeTranslationRequestID == requestID else { return }
+                    accumulated += token
+                    self.translationText = accumulated
+                }
+            },
+            onComplete: { [weak self] (errorMessage: String?) in
+                DispatchQueue.main.async {
+                    guard let self, self.activeTranslationRequestID == requestID else { return }
+                    if let errorMessage {
+                        self.translationStatusText = "失败"
+                        if accumulated.isEmpty {
+                            self.translationText = errorMessage
+                        }
+                    } else {
+                        self.translationStatusText = "完成"
+                    }
+                    self.translationTask = nil
+                    self.translationStreamDelegate = nil
+                }
+            }
+        )
+        translationStreamDelegate = delegate
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let task = session.dataTask(with: request)
+        translationTask = task
+        task.resume()
+    }
+
+    private func cancelTranslationRequest() {
+        activeTranslationRequestID += 1
+        translationTask?.cancel()
+        translationTask = nil
+        translationStreamDelegate = nil
+    }
+
+    private func scheduleCloudCandidateRefresh() {
+        cloudCandidateRefreshWorkItem?.cancel()
+
+        guard isChineseInputEnabled, hasComposition else {
+            Self.logCloudCandidateInfo("skip refresh: chineseInput=\(isChineseInputEnabled), hasComposition=\(hasComposition)")
+            clearCloudCandidate()
+            return
+        }
+
+        let rawPinyin = engine.rawPinyin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawPinyin.count >= 2 else {
+            Self.logCloudCandidateInfo("skip refresh: rawPinyin too short, rawPinyin=\(rawPinyin)")
+            clearCloudCandidate()
+            return
+        }
+
+        guard hasFullAccessForCloudCandidate else {
+            Self.logCloudCandidateInfo("skip refresh: no full access, rawPinyin=\(rawPinyin)")
+            setCloudCandidateStatus(.unavailable)
+            cloudCandidateText = ""
+            cancelCloudCandidateRequest(clearText: false)
+            return
+        }
+
+        activeCloudCandidateRequestID += 1
+        let requestID = activeCloudCandidateRequestID
+        let displayTextSnapshot = displayText
+        let localCandidatesSnapshot = candidates.prefix(8).map(\.text)
+        Self.logCloudCandidateInfo("schedule request: requestID=\(requestID), rawPinyin=\(rawPinyin), displayText=\(displayTextSnapshot), localCandidates=\(localCandidatesSnapshot.joined(separator: ","))")
+        setCloudCandidateStatus(.loading)
+        cloudCandidateText = ""
+
+        let workItem = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async {
+                self?.requestCloudCandidate(
+                    rawPinyin: rawPinyin,
+                    displayText: displayTextSnapshot,
+                    localCandidates: localCandidatesSnapshot,
+                    requestID: requestID
+                )
+            }
+        }
+        cloudCandidateRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cloudCandidateRefreshDelay, execute: workItem)
+    }
+
+    private func requestCloudCandidate(
+        rawPinyin: String,
+        displayText: String,
+        localCandidates: [String],
+        requestID: Int
+    ) {
+        guard activeCloudCandidateRequestID == requestID else {
+            Self.logCloudCandidateInfo("drop expired request before start: requestID=\(requestID), activeRequestID=\(activeCloudCandidateRequestID)")
+            return
+        }
+        cloudCandidateTask?.cancel()
+
+        let storedBaseURL = sharedDefaults?.string(forKey: "cloudCandidate.baseURL") ?? Self.cloudCandidateDefaultBaseURL
+        let storedModel = sharedDefaults?.string(forKey: "cloudCandidate.model") ?? Self.cloudCandidateDefaultModel
+        let baseURL = storedBaseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = storedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !baseURL.isEmpty, let url = URL(string: "\(baseURL)/api/chat") else {
+            Self.logCloudCandidateError("invalid baseURL: requestID=\(requestID), storedBaseURL=\(storedBaseURL), sanitizedBaseURL=\(baseURL)")
+            applyCloudCandidateResult("配置错误", status: .failed, requestID: requestID)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "model": model.isEmpty ? Self.cloudCandidateDefaultModel : model,
+            "stream": false,
+            "options": [
+                "temperature": 0,
+                "top_p": 0.8,
+                "num_predict": 12
+            ],
+            "messages": [
+                [
+                    "role": "system",
+                    "content": Self.cloudCandidateSystemPrompt
+                ],
+                [
+                    "role": "user",
+                    "content": Self.cloudCandidateUserPrompt(
+                        rawPinyin: rawPinyin,
+                        displayText: displayText,
+                        localCandidates: localCandidates
+                    )
+                ]
+            ]
+        ]
+
+        guard JSONSerialization.isValidJSONObject(body),
+              let data = try? JSONSerialization.data(withJSONObject: body) else {
+            Self.logCloudCandidateError("failed to build request body: requestID=\(requestID), rawPinyin=\(rawPinyin)")
+            applyCloudCandidateResult("请求错误", status: .failed, requestID: requestID)
+            return
+        }
+        request.httpBody = data
+        let bodyLogText = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+        Self.logCloudCandidateHTTP(
+            "api/chat request begin: requestID=\(requestID), url=\(url.absoluteString), method=\(request.httpMethod ?? "POST"), timeout=\(request.timeoutInterval), storedBaseURL=\(storedBaseURL), sanitizedBaseURL=\(baseURL), storedModel=\(storedModel), effectiveModel=\(model.isEmpty ? Self.cloudCandidateDefaultModel : model), rawPinyin=\(rawPinyin), displayText=\(displayText), localCandidates=\(localCandidates.joined(separator: ","))"
+        )
+        Self.logCloudCandidateHTTPChunked("api/chat request body", text: bodyLogText, requestID: requestID)
+
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            if let error = error as NSError?, error.code != NSURLErrorCancelled {
+                Self.logCloudCandidateHTTP(
+                    "api/chat response error: requestID=\(requestID), statusCode=\((response as? HTTPURLResponse)?.statusCode ?? -1), code=\(error.code), message=\(error.localizedDescription)"
+                )
+                if let data {
+                    let rawResponse = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+                    Self.logCloudCandidateHTTPChunked("api/chat response body on error", text: rawResponse, requestID: requestID)
+                }
+                let failureText = Self.cloudCandidateFailureText(for: error)
+                DispatchQueue.main.async {
+                    self.applyCloudCandidateResult(failureText, status: .failed, requestID: requestID)
+                }
+                return
+            }
+            if let error = error as NSError?, error.code == NSURLErrorCancelled {
+                Self.logCloudCandidateHTTP("api/chat request cancelled: requestID=\(requestID), code=\(error.code), message=\(error.localizedDescription)")
+                return
+            }
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let rawResponse = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            Self.logCloudCandidateHTTP("api/chat response begin: requestID=\(requestID), statusCode=\(statusCode), bytes=\(data?.count ?? 0)")
+            Self.logCloudCandidateHTTPChunked("api/chat response body", text: rawResponse, requestID: requestID)
+            guard let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                Self.logCloudCandidateHTTP("api/chat response parse failed: requestID=\(requestID), statusCode=\(statusCode)")
+                DispatchQueue.main.async {
+                    self.applyCloudCandidateResult(rawResponse.isEmpty ? "响应为空" : "JSON错误", status: .failed, requestID: requestID)
+                }
+                return
+            }
+            if let errorMessage = object["error"] as? String, !errorMessage.isEmpty {
+                Self.logCloudCandidateHTTP("api/chat response model error: requestID=\(requestID), error=\(errorMessage)")
+                DispatchQueue.main.async {
+                    self.applyCloudCandidateResult(Self.shortCloudCandidateErrorText(errorMessage), status: .failed, requestID: requestID)
+                }
+                return
+            }
+            let rawContent = ((object["message"] as? [String: Any])?["content"] as? String) ?? ""
+            let sanitized = Self.sanitizeCloudCandidate(rawContent)
+            Self.logCloudCandidateHTTP("api/chat response parsed: requestID=\(requestID), rawContent=\(rawContent), sanitized=\(sanitized)")
+            DispatchQueue.main.async {
+                if sanitized.isEmpty {
+                    self.applyCloudCandidateResult(rawContent.isEmpty ? "响应为空" : "无中文结果", status: .failed, requestID: requestID)
+                } else {
+                    self.applyCloudCandidateResult(sanitized, status: .success, requestID: requestID)
+                }
+            }
+        }
+        cloudCandidateTask = task
+        task.resume()
+    }
+
+    private func applyCloudCandidateResult(
+        _ text: String,
+        status: PinyinCloudCandidateStatus,
+        requestID: Int
+    ) {
+        guard activeCloudCandidateRequestID == requestID else {
+            Self.logCloudCandidateInfo("drop expired result: requestID=\(requestID), activeRequestID=\(activeCloudCandidateRequestID), text=\(text)")
+            return
+        }
+        Self.logCloudCandidateInfo("apply result: requestID=\(requestID), status=\(String(describing: status)), text=\(text)")
+        cloudCandidateTask = nil
+        cloudCandidateText = text
+        setCloudCandidateStatus(status)
+    }
+
+    private func clearCloudCandidate() {
+        cloudCandidateText = ""
+        setCloudCandidateStatus(.idle)
+        cancelCloudCandidateRequest(clearText: false)
+    }
+
+    private func cancelCloudCandidateRequest(clearText: Bool) {
+        Self.logCloudCandidateInfo("cancel request: activeRequestID=\(activeCloudCandidateRequestID), clearText=\(clearText)")
+        activeCloudCandidateRequestID += 1
+        cloudCandidateRefreshWorkItem?.cancel()
+        cloudCandidateRefreshWorkItem = nil
+        cloudCandidateTask?.cancel()
+        cloudCandidateTask = nil
+        if clearText {
+            cloudCandidateText = ""
+            setCloudCandidateStatus(.idle)
+        }
+    }
+
+    private func setCloudCandidateStatus(_ status: PinyinCloudCandidateStatus) {
+        if cloudCandidateStatus != status {
+            cloudCandidateStatus = status
+        }
+    }
+
+    private static var cloudCandidateSystemPrompt: String {
+        """
+        你是一个中文拼音输入法 IME 的候选词排序模型。
+        你会收到当前未上屏拼音、当前显示内容、若干本地候选词。
+        请预测用户最可能想输入的一个简体中文候选。
+
+        输出要求非常严格：
+        - 只输出一个中文候选词。
+        - 不输出解释。
+        - 不输出引号。
+        - 不输出 JSON。
+        - 不输出标点，除非候选词本身必须包含标点。
+        - 不输出多个候选。
+        - 不要包含 <think>、思考过程或任何推理内容。
+
+        选择策略：
+        - 优先考虑完整拼音对应的常用词/短语。
+        - 本地候选中有自然结果时，优先选择本地候选。
+        - 对缩写、漏拼、长句拼音，可以补全为常见表达。
+        - 如果无法判断，返回本地候选第一个。
+        """
+    }
+
+    private static func cloudCandidateUserPrompt(
+        rawPinyin: String,
+        displayText: String,
+        localCandidates: [String]
+    ) -> String {
+        """
+        当前拼音: \(rawPinyin)
+        当前显示: \(displayText)
+        本地候选: \(localCandidates.joined(separator: ", "))
+
+        请只返回一个最佳中文候选词。
+        """
+    }
+
+    private static func sanitizeCloudCandidate(_ value: String) -> String {
+        var text = value.replacingOccurrences(
+            of: #"(?s)<think>.*?</think>"#,
+            with: "",
+            options: .regularExpression
+        )
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = text.components(separatedBy: .newlines).first ?? ""
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = text.trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’`，。,.：:；;、 "))
+        if let separator = text.firstIndex(where: { "：:,，".contains($0) }) {
+            text = String(text[text.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let filtered = text.filter { character in
+            guard character.unicodeScalars.count == 1,
+                  let scalar = character.unicodeScalars.first else { return false }
+            return scalar.value >= 0x4e00 && scalar.value <= 0x9fff
+        }
+        return String(filtered.prefix(12))
+    }
+
+    private static func cloudCandidateFailureText(for error: NSError) -> String {
+        switch error.code {
+        case NSURLErrorTimedOut:
+            return "超时"
+        case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost:
+            return "连接失败"
+        case NSURLErrorNotConnectedToInternet:
+            return "无网络"
+        case NSURLErrorAppTransportSecurityRequiresSecureConnection:
+            return "ATS限制"
+        default:
+            return "网络失败"
+        }
+    }
+
+    private static func shortCloudCandidateErrorText(_ errorMessage: String) -> String {
+        let lowercased = errorMessage.lowercased()
+        if lowercased.contains("model") {
+            return "模型错误"
+        }
+        if lowercased.contains("not found") {
+            return "未找到"
+        }
+        if lowercased.contains("timeout") {
+            return "超时"
+        }
+        if lowercased.contains("context") {
+            return "上下文错误"
+        }
+        return "服务错误"
+    }
+
+    private func persistQuickFillItems(_ items: [String]) {
+        quickFillItems = items
+        sharedDefaults?.set(items, forKey: Self.quickFillItemsDefaultsKey)
+        sharedDefaults?.synchronize()
+    }
+
+    private static func logCloudCandidateInfo(_ message: String) {
+        appendKeyboardDiagnosticLog(component: "CloudCandidate", level: "info", message: message)
+    }
+
+    private static func logInputEngineInfo(_ message: String) {
+        appendKeyboardDiagnosticLog(component: "InputEngine", level: "info", message: message)
+    }
+
+    private static func logCloudCandidateError(_ message: String) {
+        appendKeyboardDiagnosticLog(component: "CloudCandidate", level: "error", message: message, error: message)
+    }
+
+    private static func logCloudCandidateHTTP(_ message: String) {
+        appendKeyboardDiagnosticLog(component: "CloudCandidate.HTTP", level: "debug", message: message)
+    }
+
+    private static func appendKeyboardDiagnosticLog(
+        component: String,
+        level: String,
+        message: String,
+        error: String? = nil
+    ) {
+        let now = Date()
+        keyboardDiagnosticLogQueue.async {
+            guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: sharedDefaultsSuiteName) else { return }
+            let fileURL = containerURL
+                .appendingPathComponent("logs", isDirectory: true)
+                .appendingPathComponent("\(keyboardDiagnosticLogChunkFormatter.string(from: now)).jsonl")
+            let entry: [String: Any] = [
+                "id": UUID().uuidString,
+                "timestamp": keyboardDiagnosticLogDateFormatter.string(from: now),
+                "source": "keyboard",
+                "category": "keyboardDiagnostic",
+                "level": level,
+                "message": "[\(component)] \(message)",
+                "method": "",
+                "url": "",
+                "requestHeaders": [:],
+                "requestBody": "",
+                "statusCode": NSNull(),
+                "responseHeaders": [:],
+                "responseBody": "",
+                "error": error.map { $0 as Any } ?? NSNull(),
+                "durationMS": 0,
+                "metadata": [
+                    "diagnosticArea": "keyboardExtension",
+                    "component": component
+                ]
+            ]
+
+            do {
+                try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+                if !FileManager.default.fileExists(atPath: fileURL.path) {
+                    FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+                }
+                let data = try JSONSerialization.data(withJSONObject: entry, options: [])
+                guard let line = String(data: data, encoding: .utf8), let lineData = "\(line)\n".data(using: .utf8) else { return }
+                let handle = try FileHandle(forWritingTo: fileURL)
+                handle.seekToEndOfFile()
+                handle.write(lineData)
+                handle.closeFile()
+            } catch {
+                NSLog("[KeyboardDiagnostic] failed to write app-group log: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private static func logCloudCandidateHTTPChunked(
+        _ label: String,
+        text: String,
+        requestID: Int,
+        chunkSize: Int = 900
+    ) {
+        let normalizedText = text.isEmpty ? "<empty>" : text
+        let safeChunkSize = max(1, chunkSize)
+        let totalChunks = max(1, Int(ceil(Double(normalizedText.count) / Double(safeChunkSize))))
+
+        var chunkIndex = 0
+        var startIndex = normalizedText.startIndex
+        while startIndex < normalizedText.endIndex {
+            let endIndex = normalizedText.index(
+                startIndex,
+                offsetBy: safeChunkSize,
+                limitedBy: normalizedText.endIndex
+            ) ?? normalizedText.endIndex
+            chunkIndex += 1
+            let chunk = String(normalizedText[startIndex..<endIndex])
+            logCloudCandidateHTTP(
+                "\(label): requestID=\(requestID), chunk=\(chunkIndex)/\(totalChunks), text=\(chunk)"
+            )
+            startIndex = endIndex
+        }
+
+        if normalizedText.isEmpty {
+            logCloudCandidateHTTP("\(label): requestID=\(requestID), chunk=1/1, text=<empty>")
+        }
+    }
+
+    private var clampedQuickFillDraftCursorOffset: Int {
+        max(0, min(quickFillDraftCursorOffset, quickFillDraftText.count))
+    }
+
+    private func scheduleCandidateRefresh(resetCandidatesWhenEmpty: Bool) {
+        candidateRefreshGeneration += 1
+        candidateRefreshWorkItem?.cancel()
+        let generation = candidateRefreshGeneration
+
+        guard isChineseInputEnabled else {
+            applyCandidateRefreshResult([], generation: generation)
+            return
+        }
+
+        if resetCandidatesWhenEmpty, !engine.hasComposition {
+            applyCandidateRefreshResult([], generation: generation)
+            return
+        }
+
+        let engineSnapshot = engine
+        setCandidateRefreshPending(true)
+
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem {
+            guard !workItem.isCancelled else { return }
+            let refreshedCandidates = engineSnapshot.candidates
+            guard !workItem.isCancelled else { return }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.candidateRefreshGeneration == generation,
+                      !workItem.isCancelled else {
+                    return
+                }
+                self.applyCandidateRefreshResult(refreshedCandidates, generation: generation)
+            }
+        }
+        candidateRefreshWorkItem = workItem
+        candidateQueue.asyncAfter(deadline: .now() + Self.candidateRefreshDelay, execute: workItem)
+    }
+
+    private func cancelPendingCandidateRefresh(clearCandidates: Bool) {
+        candidateRefreshGeneration += 1
+        candidateRefreshWorkItem?.cancel()
+        candidateRefreshWorkItem = nil
+        appliedCandidateGeneration = candidateRefreshGeneration
+        setCandidateRefreshPending(false)
+        if clearCandidates, !candidates.isEmpty {
+            candidates = []
+        }
+    }
+
+    private func applyCandidateRefreshResult(
+        _ refreshedCandidates: [KeyboardInputCandidate],
+        generation: Int
+    ) {
+        guard generation == candidateRefreshGeneration else { return }
+        candidateRefreshWorkItem = nil
+        setCandidateRefreshPending(false)
+        appliedCandidateGeneration = generation
+        if candidates != refreshedCandidates {
+            candidates = refreshedCandidates
+        }
+        if refreshedCandidates.isEmpty {
+            hideCandidatePageIfNeeded()
+        }
+        scheduleCloudCandidateRefresh()
+    }
+
+    private func refreshPublishedComposition() {
+        updatePublishedEngineState()
+
+        let nextDisplayText = engine.displayText
+        if displayText != nextDisplayText {
+            displayText = nextDisplayText
+        }
+
+        let nextRawPinyinText = engine.rawPinyin
+        if rawPinyinText != nextRawPinyinText {
+            rawPinyinText = nextRawPinyinText
+        }
+
+        let nextDisplayCursorOffset = engine.displayCursorOffset
+        if displayCursorOffset != nextDisplayCursorOffset {
+            displayCursorOffset = nextDisplayCursorOffset
+        }
+
+        let nextHasComposition = engine.hasComposition
+        if hasComposition != nextHasComposition {
+            hasComposition = nextHasComposition
+        }
+
+        let nextInputEngineFailureText = engine.failureText
+        if inputEngineFailureText != nextInputEngineFailureText {
+            inputEngineFailureText = nextInputEngineFailureText
+        }
+    }
+
+    private func updatePublishedEngineState() {
+        let nextIsUsingRimeEngine = engine.isUsingRime
+        if isUsingRimeEngine != nextIsUsingRimeEngine {
+            isUsingRimeEngine = nextIsUsingRimeEngine
+        }
+    }
+
+    private func setCandidateRefreshPending(_ isPending: Bool) {
+        if isCandidateRefreshPending != isPending {
+            isCandidateRefreshPending = isPending
+        }
+    }
+
+    private func hideCandidatePageIfNeeded() {
+        if isCandidatePageVisible {
+            isCandidatePageVisible = false
+        }
+    }
+
+    private func hideQuickFillPanelIfNeeded() {
+        if isQuickFillPanelVisible {
+            setQuickFillPanelVisible(false)
+        }
+    }
+
+    private func resetCandidateScrollPosition() {
+        candidateScrollResetToken += 1
+    }
+}
+
+private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
+    private static let languageSwitchActionName = "simpanin.inputMode.toggleChineseEnglish"
+    private static let spaceCursorHorizontalPointsPerCharacter: CGFloat = 4.0
+    private static let spaceCursorVerticalPointsPerCharacter: CGFloat = 20
+
+    private weak var controller: KeyboardInputViewController?
+    private let standardActionHandler: any KeyboardActionHandler
+    private let pinyinState: PinyinKeyboardInputState
+    private var appliedSpaceCursorDragOffset = 0
+    private var didMoveCursorWithSpaceDrag = false
+
+    init(
+        controller: KeyboardInputViewController,
+        standardActionHandler: any KeyboardActionHandler,
+        pinyinState: PinyinKeyboardInputState
+    ) {
+        self.controller = controller
+        self.standardActionHandler = standardActionHandler
+        self.pinyinState = pinyinState
+    }
+
+    func canHandle(_ gesture: Keyboard.Gesture, on action: KeyboardAction) -> Bool {
+        if shouldHandlePinyinAction(action) {
+            return true
+        }
+        return standardActionHandler.canHandle(gesture, on: action)
+    }
+
+    func handle(_ action: KeyboardAction) {
+        switch action {
+        case .custom(named: Self.languageSwitchActionName):
+            handleLanguageSwitch()
+        case .shift(let keyboardCase):
+            handleShift(keyboardCase)
+        case .character(let value) where pinyinState.isQuickFillAddInputVisible:
+            handleQuickFillAddCharacter(value)
+            applyLockedKeyboardCase()
+        case .character(let value) where shouldRouteCharacterToInputEngine(value):
+            pinyinState.insertLetter(value)
+            applyLockedKeyboardCase()
+        case .backspace where pinyinState.isQuickFillAddInputVisible:
+            handleQuickFillAddBackspace()
+            applyLockedKeyboardCase()
+        case .backspace where pinyinState.hasComposition:
+            if pinyinState.deleteBackward() {
+                applyLockedKeyboardCase()
+            } else {
+                standardActionHandler.handle(action)
+                applyLockedKeyboardCase()
+            }
+        case .backspace:
+            if pinyinState.deleteQuickFillDraftBackward() {
+                applyLockedKeyboardCase()
+                return
+            }
+            handlePlainBackspace()
+        case .primary:
+            if pinyinState.isQuickFillAddInputVisible {
+                handleQuickFillAddPrimary()
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            if pinyinState.hasComposition,
+               let text = pinyinState.commitCompositionAsText() {
+                commitText(text)
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            standardActionHandler.handle(action)
+            applyLockedKeyboardCaseDeferred()
+        default:
+            standardActionHandler.handle(action)
+            applyLockedKeyboardCase()
+        }
+    }
+
+    func handle(_ gesture: Keyboard.Gesture, on action: KeyboardAction) {
+        guard gesture == .release else {
+            if shouldConsumePreReleaseGesture(on: action) {
+                return
+            }
+            standardActionHandler.handle(gesture, on: action)
+            return
+        }
+
+        switch action {
+        case .custom(named: Self.languageSwitchActionName):
+            handleLanguageSwitch()
+        case .shift(let keyboardCase):
+            handleShift(keyboardCase)
+        case .character(let value):
+            if pinyinState.isQuickFillAddInputVisible {
+                handleQuickFillAddCharacter(value)
+                applyLockedKeyboardCase()
+                return
+            }
+            guard shouldRouteCharacterToInputEngine(value) else {
+                handleStandardAction(gesture, on: action)
+                return
+            }
+            pinyinState.insertLetter(value)
+            applyLockedKeyboardCase()
+        case .backspace:
+            if pinyinState.isQuickFillAddInputVisible {
+                handleQuickFillAddBackspace()
+                applyLockedKeyboardCase()
+                return
+            }
+            guard pinyinState.hasComposition else {
+                if pinyinState.deleteQuickFillDraftBackward() {
+                    applyLockedKeyboardCase()
+                    return
+                }
+                handlePlainBackspace()
+                return
+            }
+            if pinyinState.deleteBackward() {
+                applyLockedKeyboardCase()
+            } else {
+                handleStandardAction(gesture, on: action)
+            }
+        case .space:
+            if didMoveCursorWithSpaceDrag {
+                resetSpaceCursorDrag()
+                applyLockedKeyboardCase()
+                return
+            }
+            if pinyinState.isQuickFillAddInputVisible {
+                handleQuickFillAddSpace()
+                applyLockedKeyboardCase()
+                return
+            }
+            guard let first = pinyinState.firstFreshCompositionCandidateForCommit() else {
+                handleStandardAction(gesture, on: action)
+                return
+            }
+            if let text = pinyinState.select(first) {
+                commitText(text)
+            }
+            applyLockedKeyboardCase()
+        case .primary:
+            if pinyinState.isQuickFillAddInputVisible {
+                handleQuickFillAddPrimary()
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            if pinyinState.hasComposition,
+               let text = pinyinState.commitCompositionAsText() {
+                commitText(text)
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            handleStandardAction(gesture, on: action)
+            applyLockedKeyboardCaseDeferred()
+        default:
+            if pinyinState.hasComposition,
+               let text = pinyinState.commitCompositionAsText() {
+                commitText(text)
+            }
+            handleStandardAction(gesture, on: action)
+        }
+    }
+
+    func handle(_ suggestion: Autocomplete.Suggestion) {
+        standardActionHandler.handle(suggestion)
+    }
+
+    func handleDrag(
+        on action: KeyboardAction,
+        from startLocation: CGPoint,
+        to currentLocation: CGPoint
+    ) {
+        if isSpaceAction(action) {
+            guard !pinyinState.isQuickFillAddInputVisible else {
+                resetSpaceCursorDrag()
+                return
+            }
+            handleSpaceCursorDrag(from: startLocation, to: currentLocation)
+        } else {
+            resetSpaceCursorDrag()
+            standardActionHandler.handleDrag(on: action, from: startLocation, to: currentLocation)
+        }
+    }
+
+    private func isSpaceAction(_ action: KeyboardAction) -> Bool {
+        switch action {
+        case .space:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handleSpaceCursorDrag(
+        from startLocation: CGPoint,
+        to currentLocation: CGPoint
+    ) {
+        guard !pinyinState.isQuickFillAddInputVisible else {
+            resetSpaceCursorDrag()
+            return
+        }
+
+        let targetOffset = spaceCursorTargetOffset(from: startLocation, to: currentLocation)
+        let offset = targetOffset - appliedSpaceCursorDragOffset
+        guard offset != 0 else { return }
+
+        appliedSpaceCursorDragOffset = targetOffset
+        didMoveCursorWithSpaceDrag = true
+        pinyinState.updateSpaceTrackpadPreview(offset: targetOffset)
+        controller?.textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+    }
+
+    private func spaceCursorTargetOffset(
+        from startLocation: CGPoint,
+        to currentLocation: CGPoint
+    ) -> Int {
+        let translation = CGSize(
+            width: currentLocation.x - startLocation.x,
+            height: currentLocation.y - startLocation.y
+        )
+        let horizontalOffset = Int((translation.width / Self.spaceCursorHorizontalPointsPerCharacter).rounded())
+        let verticalOffset = Int((translation.height / Self.spaceCursorVerticalPointsPerCharacter).rounded())
+        return horizontalOffset + verticalOffset
+    }
+
+    private func resetSpaceCursorDrag() {
+        appliedSpaceCursorDragOffset = 0
+        didMoveCursorWithSpaceDrag = false
+        pinyinState.endSpaceTrackpadPreview()
+    }
+
+    func triggerFeedback(for gesture: Keyboard.Gesture, on action: KeyboardAction) {
+        // Disable KeyboardKit's combined feedback path to avoid key haptics.
+    }
+
+    func triggerAudioFeedback(_ feedback: Feedback.Audio) {
+        standardActionHandler.triggerAudioFeedback(feedback)
+    }
+
+    func triggerHapticFeedback(_ feedback: Feedback.Haptic) {
+        // Key vibration is intentionally disabled for this keyboard.
+    }
+
+    private func isPinyinLetter(_ value: String) -> Bool {
+        value.count == 1 && value.rangeOfCharacter(from: .letters) != nil
+    }
+
+    private func shouldRouteCharacterToInputEngine(_ value: String) -> Bool {
+        guard pinyinState.isChineseInputEnabled, value.count == 1 else { return false }
+        if isPinyinLetter(value) {
+            return true
+        }
+        guard pinyinState.isUsingRimeEngine else {
+            return false
+        }
+        if value == "/" || value == "'" {
+            return true
+        }
+        return pinyinState.hasComposition && isRimeCompositionCharacter(value)
+    }
+
+    private func isRimeCompositionCharacter(_ value: String) -> Bool {
+        guard value.count == 1, let scalar = value.unicodeScalars.first else { return false }
+        let asciiValue = scalar.value
+        if asciiValue >= 48 && asciiValue <= 57 {
+            return true
+        }
+        return Set("';/\\-=,.").contains(Character(value))
+    }
+
+    private func handleQuickFillAddCharacter(_ value: String) {
+        if shouldRouteCharacterToInputEngine(value) {
+            pinyinState.insertLetter(value)
+        } else {
+            pinyinState.appendQuickFillDraftText(value)
+        }
+    }
+
+    private func handleQuickFillAddBackspace() {
+        if pinyinState.hasComposition {
+            _ = pinyinState.deleteBackward()
+        } else {
+            _ = pinyinState.deleteQuickFillDraftBackward()
+        }
+    }
+
+    private func handleQuickFillAddSpace() {
+        if pinyinState.hasComposition,
+           let first = pinyinState.firstFreshCandidateForCommit(),
+           let text = pinyinState.select(first) {
+            commitText(text)
+        } else {
+            pinyinState.appendQuickFillDraftText(" ")
+        }
+    }
+
+    private func handleQuickFillAddPrimary() {
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitCompositionAsText() {
+            commitText(text)
+        } else {
+            pinyinState.saveQuickFillDraft()
+        }
+    }
+
+    private func shouldHandlePinyinAction(_ action: KeyboardAction) -> Bool {
+        switch action {
+        case .custom(named: Self.languageSwitchActionName):
+            return true
+        case .character(let value):
+            if pinyinState.isQuickFillAddInputVisible {
+                return true
+            }
+            return shouldRouteCharacterToInputEngine(value)
+        case .backspace, .shift, .space, .primary:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldConsumePreReleaseGesture(on action: KeyboardAction) -> Bool {
+        switch action {
+        case .character(let value):
+            if pinyinState.isQuickFillAddInputVisible {
+                return true
+            }
+            return shouldRouteCharacterToInputEngine(value)
+        case .backspace:
+            return true
+        case .space:
+            return pinyinState.isQuickFillAddInputVisible
+        case .primary:
+            return pinyinState.hasComposition || pinyinState.isQuickFillAddInputVisible
+        default:
+            return false
+        }
+    }
+
+    private func handleShift(_ keyboardCase: Keyboard.KeyboardCase) {
+        pinyinState.isUppercaseLocked.toggle()
+        applyLockedKeyboardCase()
+    }
+
+    private func handleLanguageSwitch() {
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitCompositionAsText() {
+            commitText(text)
+        }
+        pinyinState.toggleChineseInput()
+        applyLockedKeyboardCase()
+    }
+
+    private func commitText(_ text: String) {
+        if pinyinState.isQuickFillAddInputVisible {
+            pinyinState.appendQuickFillDraftText(text)
+        } else {
+            controller?.insertText(text)
+        }
+    }
+
+    private func handleStandardAction(_ gesture: Keyboard.Gesture, on action: KeyboardAction) {
+        standardActionHandler.handle(gesture, on: action)
+        applyLockedKeyboardCase()
+    }
+
+    private func handlePlainBackspace() {
+        if pinyinState.isQuickFillAddInputVisible,
+           pinyinState.deleteQuickFillDraftBackward() {
+            applyLockedKeyboardCase()
+            return
+        }
+        controller?.textDocumentProxy.deleteBackward()
+        applyLockedKeyboardCase()
+    }
+
+    private func applyLockedKeyboardCase() {
+        controller?.setKeyboardCase(pinyinState.isUppercaseLocked ? .uppercased : .lowercased)
+    }
+
+    private func applyLockedKeyboardCaseDeferred() {
+        applyLockedKeyboardCase()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyLockedKeyboardCase()
+        }
+    }
+}
+
+private struct PinyinKeyboardView: View {
+    private static let languageSwitchActionName = "simpanin.inputMode.toggleChineseEnglish"
+
+    @ObservedObject var keyboardContext: KeyboardContext
+    let services: Keyboard.Services
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let hasFullAccess: Bool
+    let insertText: (String) -> Void
+    let dismissKeyboard: () -> Void
+
+    var body: some View {
+        KeyboardView(
+            layout: keyboardLayout,
+            services: services,
+            buttonContent: { params in
+                if case .shift(let keyboardCase) = params.item.action {
+                    PinyinShiftButtonContent(keyboardCase: keyboardCase)
+                } else if case .custom(named: Self.languageSwitchActionName) = params.item.action {
+                    PinyinLanguageSwitchButtonContent(isChineseInputEnabled: pinyinState.isChineseInputEnabled)
+                } else if case .primary = params.item.action, pinyinState.hasComposition || pinyinState.isQuickFillAddInputVisible {
+                    PinyinPrimaryConfirmButtonContent(title: pinyinState.isQuickFillAddInputVisible && !pinyinState.hasComposition ? "保存" : "确认")
+                } else {
+                    params.view
+                }
+            },
+            buttonView: { $0.view },
+            collapsedView: { $0.view },
+            emojiKeyboard: { $0.view },
+            toolbar: { _ in
+                PinyinCandidateToolbar(
+                    pinyinState: pinyinState,
+                    insertText: insertText,
+                    dismissKeyboard: dismissKeyboard,
+                    openQuickFillPanel: {
+                        pinyinState.toggleQuickFillPanel()
+                    },
+                    openTranslationPanel: {
+                        pinyinState.openTranslationPanel(hasFullAccess: hasFullAccess)
+                    }
+                )
+            }
+        )
+        .overlay(alignment: .top) {
+            expandedCandidateOverlay
+        }
+        .overlay(alignment: .top) {
+            quickFillOverlay
+        }
+        .overlay(alignment: .top) {
+            translationOverlay
+        }
+        .overlay(alignment: .topLeading) {
+            edgeBlankTapOverlay
+        }
+        .overlay {
+            spaceTrackpadOverlay
+        }
+        .onAppear {
+            pinyinState.scheduleDelayedRimeInputEngineReload()
+            pinyinState.setCloudCandidateFullAccess(hasFullAccess)
+        }
+        .onChange(of: hasFullAccess) { value in
+            pinyinState.setCloudCandidateFullAccess(value)
+        }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var spaceTrackpadOverlay: some View {
+        if pinyinState.isSpaceTrackpadActive {
+            PinyinSpaceTrackpadOverlay()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private var edgeBlankTapOverlay: some View {
+        if pinyinState.isChineseInputEnabled
+            && !pinyinState.isCandidatePageVisible
+            && !pinyinState.isQuickFillPanelVisible
+            && !pinyinState.isQuickFillAddInputVisible
+            && !pinyinState.isTranslationPanelVisible
+            && !pinyinState.isSpaceTrackpadActive {
+            PinyinKeyboardEdgeBlankTapOverlay(
+                topInset: currentToolbarHeight,
+                isUppercaseLocked: pinyinState.isUppercaseLocked
+            ) { letter in
+                pinyinState.insertLetter(letter)
+            }
+        }
+    }
+
+    private var keyboardLayout: KeyboardLayout {
+        var layout = KeyboardLayout.standard(for: keyboardContext)
+        let utilityKeySide = utilityKeySide(in: layout)
+        layout.itemRows = layout.itemRows.map { row in
+            row.map { item in
+                resizedUtilityItem(localizedPunctuationItem(item), side: utilityKeySide)
+            }
+        }
+        layout.itemRows.insert(languageSwitchItem(side: utilityKeySide), after: .space)
+        return layout
+    }
+
+    private func localizedPunctuationItem(_ item: KeyboardLayout.Item) -> KeyboardLayout.Item {
+        guard pinyinState.isChineseInputEnabled,
+              case .character(let value) = item.action,
+              let localizedValue = localizedChinesePunctuation(for: value) else {
+            return item
+        }
+
+        return KeyboardLayout.Item(
+            action: .character(localizedValue),
+            secondaryAction: item.secondaryAction,
+            size: item.size,
+            alignment: item.alignment,
+            edgeInsets: item.edgeInsets
+        )
+    }
+
+    private func localizedChinesePunctuation(for value: String) -> String? {
+        switch value {
+        case ":":
+            return "："
+        case ";":
+            return "；"
+        case "(":
+            return "（"
+        case ")":
+            return "）"
+        case "\"":
+            return "“"
+        case ".":
+            return "。"
+        case ",":
+            return "，"
+        case "?":
+            return "？"
+        case "!":
+            return "！"
+        case "'":
+            return "’"
+        case "[":
+            return "【"
+        case "]":
+            return "】"
+        case "{":
+            return "《"
+        case "}":
+            return "》"
+        case "%":
+            return "％"
+        case "\\":
+            return "、"
+        case "|":
+            return "｜"
+        case "~":
+            return "～"
+        case "<":
+            return "〈"
+        case ">":
+            return "〉"
+        default:
+            return nil
+        }
+    }
+
+    private func utilityKeySide(in layout: KeyboardLayout) -> CGFloat {
+        for row in layout.itemRows {
+            for item in row {
+                if isPrimaryAction(item.action) {
+                    return item.size.height
+                }
+            }
+        }
+        return CGFloat(layout.idealItemHeight)
+    }
+
+    private func resizedUtilityItem(
+        _ item: KeyboardLayout.Item,
+        side: CGFloat
+    ) -> KeyboardLayout.Item {
+        guard isKeyboardTypeSwitchAction(item.action) else { return item }
+        return item.withWidth(.points(side + 20))
+    }
+
+    private func isPrimaryAction(_ action: KeyboardAction) -> Bool {
+        if case .primary = action {
+            return true
+        }
+        return false
+    }
+
+    private func isKeyboardTypeSwitchAction(_ action: KeyboardAction) -> Bool {
+        switch action {
+        case .keyboardType(.numeric), .keyboardType(.alphabetic):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func languageSwitchItem(side: CGFloat) -> KeyboardLayout.Item {
+        let adjustedSide = max(0, side - 10)
+        return KeyboardLayout.Item(
+            action: .custom(named: Self.languageSwitchActionName),
+            size: .init(width: .points(adjustedSide), height: adjustedSide)
+        )
+    }
+
+    @ViewBuilder
+    private var expandedCandidateOverlay: some View {
+        if pinyinState.isCandidatePageVisible {
+            PinyinExpandedCandidateOverlay(
+                pinyinState: pinyinState,
+                insertText: insertText
+            )
+            .padding(.top, expandedCandidateOverlayTopOffset)
+        }
+    }
+
+    @ViewBuilder
+    private var quickFillOverlay: some View {
+        if pinyinState.isQuickFillPanelVisible {
+            PinyinQuickFillPanel(
+                pinyinState: pinyinState,
+                insertText: insertText
+            )
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isQuickFillPanelVisible)
+        }
+    }
+
+    @ViewBuilder
+    private var translationOverlay: some View {
+        if pinyinState.isTranslationPanelVisible {
+            PinyinTranslationPanel(pinyinState: pinyinState)
+                .padding(.top, PinyinKeyboardMetrics.candidateToolbarHeight)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isTranslationPanelVisible)
+        }
+    }
+
+    private var currentToolbarHeight: CGFloat {
+        PinyinKeyboardMetrics.candidateToolbarHeight
+            + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+    }
+
+    private var expandedCandidateOverlayTopOffset: CGFloat {
+        PinyinKeyboardMetrics.expandedCandidateOverlayTopOffset
+            + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+    }
+}
+
+private struct PinyinSpaceTrackpadOverlay: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {
+        uiView.effect = UIBlurEffect(style: .systemMaterial)
+    }
+}
+
+private struct PinyinKeyboardEdgeBlankTapOverlay: View {
+    let topInset: CGFloat
+    let isUppercaseLocked: Bool
+    let insertLetter: (String) -> Void
+
+    private let rowCount: CGFloat = 4
+    private let secondLetterRowIndex: CGFloat = 1
+    private let sideHitWidthRatio: CGFloat = 0.085
+    private let sideHitWidthRange: ClosedRange<CGFloat> = 24...42
+
+    var body: some View {
+        GeometryReader { proxy in
+            let keyboardTop = topInset
+            let keyboardHeight = max(0, proxy.size.height - keyboardTop)
+            let rowHeight = keyboardHeight / rowCount
+            let hitWidth = min(
+                sideHitWidthRange.upperBound,
+                max(sideHitWidthRange.lowerBound, proxy.size.width * sideHitWidthRatio)
+            )
+            let rowTop = keyboardTop + rowHeight * secondLetterRowIndex
+
+            ZStack(alignment: .topLeading) {
+                edgeHitArea(letter: isUppercaseLocked ? "A" : "a")
+                    .frame(width: hitWidth, height: rowHeight)
+                    .offset(x: 0, y: rowTop)
+
+                edgeHitArea(letter: isUppercaseLocked ? "L" : "l")
+                    .frame(width: hitWidth, height: rowHeight)
+                    .offset(x: proxy.size.width - hitWidth, y: rowTop)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+    }
+
+    private func edgeHitArea(letter: String) -> some View {
+        Color.primary.opacity(0.001)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                insertLetter(letter)
+            }
+    }
+}
+
+private extension KeyboardLayout.Item {
+    func withWidth(_ width: KeyboardLayout.ItemWidth) -> KeyboardLayout.Item {
+        KeyboardLayout.Item(
+            action: action,
+            secondaryAction: secondaryAction,
+            size: .init(width: width, height: size.height),
+            alignment: alignment,
+            edgeInsets: edgeInsets
+        )
+    }
+}
+
+private struct PinyinLanguageSwitchButtonContent: View {
+    let isChineseInputEnabled: Bool
+
+    var body: some View {
+        Text(isChineseInputEnabled ? "中" : "英")
+            .font(.system(size: 16, weight: .semibold))
+            .minimumScaleFactor(0.8)
+            .lineLimit(1)
+    }
+}
+
+private struct PinyinPrimaryConfirmButtonContent: View {
+    var title = "确认"
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 16, weight: .semibold))
+            .minimumScaleFactor(0.75)
+            .lineLimit(1)
+    }
+}
+
+private struct PinyinShiftButtonContent: View {
+    let keyboardCase: Keyboard.KeyboardCase
+
+    var body: some View {
+        icon
+        .resizable()
+        .scaledToFit()
+        .frame(width: 24, height: 24)
+    }
+
+    private var icon: Image {
+        if let image = bundleImage {
+            return Image(uiImage: image)
+        }
+        return Image(systemName: fallbackSystemName)
+    }
+
+    private var bundleImage: UIImage? {
+        guard let url = Bundle(for: KeyboardViewController.self).url(
+            forResource: imageName,
+            withExtension: "png",
+            subdirectory: "ios-icon"
+        ) else {
+            return nil
+        }
+        return UIImage(contentsOfFile: url.path)
+    }
+
+    private var imageName: String {
+        switch keyboardCase {
+        case .uppercased:
+            return "大写图标"
+        case .capsLocked:
+            return "大写图标"
+        case .lowercased:
+            return "小写图标"
+        @unknown default:
+            return "小写图标"
+        }
+    }
+
+    private var fallbackSystemName: String {
+        switch keyboardCase {
+        case .uppercased, .capsLocked:
+            return "shift.fill"
+        case .lowercased:
+            return "shift"
+        @unknown default:
+            return "shift"
+        }
+    }
+}
+
+private struct PinyinCandidateToolbar: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+    let dismissKeyboard: () -> Void
+    let openQuickFillPanel: () -> Void
+    let openTranslationPanel: () -> Void
+
+    private let candidateBatchSize = 30
+    private let candidateStripLeadingAnchorID = "pinyin-candidate-strip-leading-anchor"
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if pinyinState.isQuickFillAddInputVisible {
+                PinyinQuickFillAddBar(pinyinState: pinyinState)
+                    .frame(height: PinyinKeyboardMetrics.quickFillAddBarHeight)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            ZStack {
+                if pinyinState.isCandidatePageVisible {
+                    expandedCompositionArea
+                } else {
+                    candidateInputArea
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: PinyinKeyboardMetrics.candidateToolbarHeight)
+            .allowsHitTesting(!pinyinState.isCandidatePageVisible)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: toolbarHeight)
+        .background(Color.clear)
+        .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isQuickFillAddInputVisible)
+    }
+
+    private var toolbarHeight: CGFloat {
+        PinyinKeyboardMetrics.candidateToolbarHeight
+            + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+    }
+
+    private var candidateInputArea: some View {
+        VStack(spacing: 7) {
+            compositionBar
+            migratedCandidateStrip
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+    }
+
+    private var expandedCompositionArea: some View {
+        VStack(spacing: 0) {
+            compositionBar
+                .padding(.horizontal, 4)
+                .padding(.top, PinyinKeyboardMetrics.candidateInputTopPadding)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var compositionBar: some View {
+        HStack(spacing: 0) {
+            PinyinPlainCompositionText(
+                text: compositionBarInputText,
+                hasComposition: pinyinState.hasComposition,
+                isRimeActive: pinyinState.isUsingRimeEngine
+            )
+            .frame(maxWidth: .infinity)
+
+            PinyinCloudCandidateButton(
+                pinyinState: pinyinState,
+                insertText: insertText
+            )
+            .frame(maxWidth: .infinity)
+
+            PinyinMascotButton()
+        }
+        .padding(.horizontal, 10)
+        .frame(height: PinyinKeyboardMetrics.compositionBarHeight)
+        .background(Color.clear)
+    }
+
+    private var compositionBarInputText: String {
+        guard pinyinState.hasComposition else { return pinyinState.displayText }
+        return pinyinState.rawPinyinText.isEmpty ? pinyinState.displayText : pinyinState.rawPinyinText
+    }
+
+    private var shouldShowUtilityIconStrip: Bool {
+        !pinyinState.hasComposition
+            && pinyinState.candidates.isEmpty
+            && !pinyinState.isCandidateRefreshPending
+    }
+
+    private var migratedCandidateStrip: some View {
+        HStack(spacing: 6) {
+            if shouldShowUtilityIconStrip {
+                PinyinCandidateUtilityIconStrip(
+                    dismissKeyboard: dismissKeyboard,
+                    openQuickFillPanel: openQuickFillPanel,
+                    openTranslationPanel: openTranslationPanel
+                )
+            } else {
+                GeometryReader { proxy in
+                    ScrollViewReader { scrollProxy in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                Color.clear
+                                    .frame(width: 0, height: 30)
+                                    .id(candidateStripLeadingAnchorID)
+
+                                ForEach(Array(pinyinState.candidates.prefix(candidateBatchSize).enumerated()), id: \.element.id) { index, candidate in
+                                    candidateButton(candidate, index: index, expanded: false)
+                                }
+
+                                if pinyinState.candidates.isEmpty {
+                                    Color.clear.frame(width: 1, height: 30)
+                                }
+                            }
+                            .frame(minWidth: proxy.size.width, alignment: .leading)
+                            .background(Color.primary.opacity(0.001))
+                            .contentShape(Rectangle())
+                            .padding(.bottom, 1)
+                        }
+                        .contentShape(Rectangle())
+                        .background(Color.primary.opacity(0.001))
+                        .scrollDisabled(pinyinState.candidates.count <= 3)
+                        .onChange(of: pinyinState.candidateScrollResetToken) { _ in
+                            scrollProxy.scrollTo(candidateStripLeadingAnchorID, anchor: .leading)
+                        }
+                    }
+                }
+                .frame(height: 32)
+
+                if pinyinState.hasComposition {
+                    candidateExpandButton
+                } else {
+                    associationClearButton
+                }
+            }
+        }
+        .frame(height: 32)
+    }
+
+    private var candidateExpandButton: some View {
+        Button {
+            guard !pinyinState.candidates.isEmpty,
+                  !pinyinState.isCandidateRefreshPending else { return }
+            pinyinState.isCandidatePageVisible.toggle()
+        } label: {
+            Image(systemName: pinyinState.isCandidatePageVisible ? "chevron.up" : "chevron.down")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 34, height: 32)
+                .background(Color(.systemGray5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: PinyinKeyboardMetrics.candidateExpandHitWidth, height: PinyinKeyboardMetrics.candidateExpandHitHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(pinyinState.candidates.isEmpty ? 0 : 1)
+        .allowsHitTesting(!pinyinState.candidates.isEmpty && !pinyinState.isCandidateRefreshPending)
+        .accessibilityLabel("展开候选词")
+    }
+
+    private var associationClearButton: some View {
+        Button {
+            guard !pinyinState.candidates.isEmpty,
+                  !pinyinState.isCandidateRefreshPending else { return }
+            pinyinState.clearAssociationSuggestions()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 32)
+                .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: PinyinKeyboardMetrics.candidateExpandHitWidth, height: PinyinKeyboardMetrics.candidateExpandHitHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(pinyinState.candidates.isEmpty ? 0 : 1)
+        .allowsHitTesting(!pinyinState.candidates.isEmpty && !pinyinState.isCandidateRefreshPending)
+        .accessibilityLabel("清除关联词")
+    }
+
+    private func candidateButton(
+        _ candidate: KeyboardInputCandidate,
+        index: Int,
+        expanded: Bool
+    ) -> some View {
+        PinyinCandidateButton(
+            candidate: candidate,
+            index: index,
+            expanded: expanded,
+            pinyinState: pinyinState,
+            insertText: insertText
+        )
+    }
+}
+
+private struct PinyinCloudCandidateButton: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+
+    var body: some View {
+        Button {
+            guard let text = pinyinState.commitCloudCandidate() else { return }
+            if pinyinState.isQuickFillAddInputVisible {
+                pinyinState.appendQuickFillDraftText(text)
+            } else {
+                insertText(text)
+            }
+        } label: {
+            ZStack {
+                switch pinyinState.cloudCandidateStatus {
+                case .loading:
+                    ProgressView()
+                        .scaleEffect(0.72)
+                case .success where !pinyinState.cloudCandidateText.isEmpty:
+                    Text(pinyinState.cloudCandidateText)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .failed where !pinyinState.cloudCandidateText.isEmpty:
+                    Text(pinyinState.cloudCandidateText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .unavailable:
+                    Text("需完全访问")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                default:
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(pinyinState.cloudCandidateStatus != .success || pinyinState.cloudCandidateText.isEmpty)
+        .accessibilityLabel("云端候选")
+    }
+}
+
+private struct PinyinPlainCompositionText: View {
+    let text: String
+    let hasComposition: Bool
+    let isRimeActive: Bool
+
+    private var displayText: String {
+        guard hasComposition else { return text }
+        return PinyinCompositionFormatter.segmentedDisplayText(from: text)
+    }
+
+    var body: some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Text(displayText)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(hasComposition ? .primary : .secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .id("compositionTextEnd")
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+                .padding(.trailing, 8)
+            }
+            .onChange(of: displayText) { _ in
+                withAnimation(.easeOut(duration: 0.16)) {
+                    scrollProxy.scrollTo("compositionTextEnd", anchor: .trailing)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+}
+
+private enum PinyinCompositionFormatter {
+    private static let syllables: Set<String> = [
+        "a", "ai", "an", "ang", "ao",
+        "ba", "bai", "ban", "bang", "bao", "bei", "ben", "beng", "bi", "bian", "biao", "bie", "bin", "bing", "bo", "bu",
+        "ca", "cai", "can", "cang", "cao", "ce", "cen", "ceng", "cha", "chai", "chan", "chang", "chao", "che", "chen", "cheng", "chi", "chong", "chou", "chu", "chua", "chuai", "chuan", "chuang", "chui", "chun", "chuo", "ci", "cong", "cou", "cu", "cuan", "cui", "cun", "cuo",
+        "da", "dai", "dan", "dang", "dao", "de", "dei", "den", "deng", "di", "dia", "dian", "diao", "die", "ding", "diu", "dong", "dou", "du", "duan", "dui", "dun", "duo",
+        "e", "ei", "en", "eng", "er",
+        "fa", "fan", "fang", "fei", "fen", "feng", "fo", "fou", "fu",
+        "ga", "gai", "gan", "gang", "gao", "ge", "gei", "gen", "geng", "gong", "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun", "guo",
+        "ha", "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hong", "hou", "hu", "hua", "huai", "huan", "huang", "hui", "hun", "huo",
+        "ji", "jia", "jian", "jiang", "jiao", "jie", "jin", "jing", "jiong", "jiu", "ju", "juan", "jue", "jun",
+        "ka", "kai", "kan", "kang", "kao", "ke", "ken", "keng", "kong", "kou", "ku", "kua", "kuai", "kuan", "kuang", "kui", "kun", "kuo",
+        "la", "lai", "lan", "lang", "lao", "le", "lei", "leng", "li", "lia", "lian", "liang", "liao", "lie", "lin", "ling", "liu", "lo", "long", "lou", "lu", "luan", "lun", "luo", "lv", "lve",
+        "ma", "mai", "man", "mang", "mao", "me", "mei", "men", "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu",
+        "na", "nai", "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ni", "nian", "niang", "niao", "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nuo", "nv", "nve",
+        "o", "ou",
+        "pa", "pai", "pan", "pang", "pao", "pei", "pen", "peng", "pi", "pian", "piao", "pie", "pin", "ping", "po", "pou", "pu",
+        "qi", "qia", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong", "qiu", "qu", "quan", "que", "qun",
+        "ran", "rang", "rao", "re", "ren", "reng", "ri", "rong", "rou", "ru", "ruan", "rui", "run", "ruo",
+        "sa", "sai", "san", "sang", "sao", "se", "sen", "seng", "sha", "shai", "shan", "shang", "shao", "she", "shen", "sheng", "shi", "shou", "shu", "shua", "shuai", "shuan", "shuang", "shui", "shun", "shuo", "si", "song", "sou", "su", "suan", "sui", "sun", "suo",
+        "ta", "tai", "tan", "tang", "tao", "te", "teng", "ti", "tian", "tiao", "tie", "ting", "tong", "tou", "tu", "tuan", "tui", "tun", "tuo",
+        "wa", "wai", "wan", "wang", "wei", "wen", "weng", "wo", "wu",
+        "xi", "xia", "xian", "xiang", "xiao", "xie", "xin", "xing", "xiong", "xiu", "xu", "xuan", "xue", "xun",
+        "ya", "yan", "yang", "yao", "ye", "yi", "yin", "ying", "yo", "yong", "you", "yu", "yuan", "yue", "yun",
+        "za", "zai", "zan", "zang", "zao", "ze", "zei", "zen", "zeng", "zha", "zhai", "zhan", "zhang", "zhao", "zhe", "zhen", "zheng", "zhi", "zhong", "zhou", "zhu", "zhua", "zhuai", "zhuan", "zhuang", "zhui", "zhun", "zhuo", "zi", "zong", "zou", "zu", "zuan", "zui", "zun", "zuo"
+    ]
+
+    static func segmentedDisplayText(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return text }
+        if trimmed.contains("'") { return trimmed }
+
+        let normalized = trimmed.replacingOccurrences(of: "ü", with: "v")
+        if normalized.contains(where: { $0.isWhitespace }) {
+            return normalized
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: "'")
+        }
+
+        guard normalized.allSatisfy({ $0.isLetter }) else { return trimmed }
+        return segmentASCIILetters(normalized).joined(separator: "'")
+    }
+
+    private static func segmentASCIILetters(_ text: String) -> [String] {
+        let lowercased = text.lowercased()
+        let characters = Array(lowercased)
+        let count = characters.count
+        guard count > 0 else { return [] }
+
+        var best: [[String]?] = Array(repeating: nil, count: count + 1)
+        best[count] = []
+
+        if count > 0 {
+            for index in stride(from: count - 1, through: 0, by: -1) {
+                var chosen: [String]?
+                let maxLength = min(6, count - index)
+                for length in stride(from: maxLength, through: 1, by: -1) {
+                    let syllable = String(characters[index ..< index + length])
+                    guard syllables.contains(syllable), let tail = best[index + length] else { continue }
+                    chosen = [String(characters[index ..< index + length])] + tail
+                    break
+                }
+                best[index] = chosen
+            }
+        }
+
+        return best[0] ?? [text]
+    }
+}
+
+private struct PinyinMascotButton: View {
+    @State private var animationToken = 0
+    @State private var isAnimating = false
+
+    var body: some View {
+        Button {
+            playAnimation()
+        } label: {
+            ZStack {
+                PinyinHeartBurstView(trigger: animationToken)
+                    .frame(width: 72, height: 58)
+                    .offset(x: -10, y: -12)
+                    .allowsHitTesting(false)
+
+                mascotImage
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 32, height: 38)
+                    .offset(y: -3)
+                    .scaleEffect(isAnimating ? 1.08 : 1)
+                    .rotationEffect(.degrees(isAnimating ? -3.5 : 0))
+                    .offset(x: isAnimating ? -1 : 0, y: isAnimating ? -5 : 0)
+            }
+            .frame(width: 56, height: 42)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Cat")
+    }
+
+    private var mascotImage: Image {
+        if let image = PinyinKeyboardImageLoader.image(named: "猫") {
+            return Image(uiImage: image)
+        }
+        return Image(systemName: "cat")
+    }
+
+    private func playAnimation() {
+        animationToken += 1
+        withAnimation(.easeOut(duration: 0.28)) {
+            isAnimating = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isAnimating = false
+            }
+        }
+    }
+}
+
+private struct PinyinHeartBurstView: View {
+    let trigger: Int
+    @State private var isExpanded = false
+
+    private let particles: [PinyinHeartParticle] = [
+        .init(x: -34, y: -32, rotation: 14, delay: 0, scale: 0.76, size: 13, color: UIColor(red: 1.00, green: 0.35, blue: 0.58, alpha: 1)),
+        .init(x: -22, y: -48, rotation: -8, delay: 0.03, scale: 0.88, size: 11, color: UIColor(red: 1.00, green: 0.48, blue: 0.66, alpha: 1)),
+        .init(x: -8, y: -58, rotation: 10, delay: 0.055, scale: 0.72, size: 9, color: UIColor(red: 1.00, green: 0.27, blue: 0.44, alpha: 1)),
+        .init(x: 8, y: -58, rotation: -12, delay: 0.075, scale: 0.80, size: 10, color: UIColor(red: 0.96, green: 0.25, blue: 0.52, alpha: 1)),
+        .init(x: 24, y: -46, rotation: 16, delay: 0.095, scale: 0.92, size: 12, color: UIColor(red: 1.00, green: 0.62, blue: 0.74, alpha: 1)),
+        .init(x: 36, y: -30, rotation: -10, delay: 0.12, scale: 0.78, size: 10, color: UIColor(red: 1.00, green: 0.35, blue: 0.58, alpha: 1)),
+        .init(x: -38, y: -14, rotation: -18, delay: 0.07, scale: 0.68, size: 8, color: UIColor(red: 1.00, green: 0.48, blue: 0.66, alpha: 1)),
+        .init(x: 40, y: -12, rotation: 20, delay: 0.14, scale: 0.70, size: 8, color: UIColor(red: 1.00, green: 0.27, blue: 0.44, alpha: 1)),
+        .init(x: -18, y: -26, rotation: 8, delay: 0.11, scale: 0.62, size: 7, color: UIColor(red: 0.96, green: 0.25, blue: 0.52, alpha: 1)),
+        .init(x: 18, y: -26, rotation: -8, delay: 0.155, scale: 0.66, size: 7, color: UIColor(red: 1.00, green: 0.62, blue: 0.74, alpha: 1)),
+        .init(x: -6, y: -42, rotation: 22, delay: 0.17, scale: 0.58, size: 8, color: UIColor(red: 1.00, green: 0.35, blue: 0.58, alpha: 1)),
+        .init(x: 6, y: -42, rotation: -22, delay: 0.195, scale: 0.58, size: 8, color: UIColor(red: 1.00, green: 0.48, blue: 0.66, alpha: 1))
+    ]
+
+    var body: some View {
+        ZStack {
+            ForEach(particles) { particle in
+                PinyinHeartShape()
+                    .fill(Color(particle.color))
+                    .frame(width: particle.size, height: particle.size)
+                    .rotationEffect(.degrees(isExpanded ? particle.rotation + 45 : 45))
+                    .scaleEffect(isExpanded ? particle.scale : 0.35)
+                    .opacity(isExpanded ? 0 : (trigger == 0 ? 0 : 1))
+                    .offset(x: isExpanded ? particle.x : 0, y: isExpanded ? particle.y : 0)
+                    .animation(
+                        .easeOut(duration: 0.76).delay(particle.delay),
+                        value: isExpanded
+                    )
+            }
+        }
+        .onChange(of: trigger) { _ in
+            guard trigger > 0 else { return }
+            isExpanded = false
+            DispatchQueue.main.async {
+                isExpanded = true
+            }
+        }
+    }
+}
+
+private struct PinyinHeartParticle: Identifiable {
+    let id = UUID()
+    let x: CGFloat
+    let y: CGFloat
+    let rotation: CGFloat
+    let delay: TimeInterval
+    let scale: CGFloat
+    let size: CGFloat
+    let color: UIColor
+}
+
+private struct PinyinHeartShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addCurve(
+            to: CGPoint(x: rect.minX, y: rect.midY - rect.height * 0.08),
+            control1: CGPoint(x: rect.minX + rect.width * 0.18, y: rect.maxY - rect.height * 0.18),
+            control2: CGPoint(x: rect.minX, y: rect.midY + rect.height * 0.18)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.24),
+            control1: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.12),
+            control2: CGPoint(x: rect.midX - rect.width * 0.24, y: rect.minY)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.maxX, y: rect.midY - rect.height * 0.08),
+            control1: CGPoint(x: rect.midX + rect.width * 0.24, y: rect.minY),
+            control2: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.12)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.midX, y: rect.maxY),
+            control1: CGPoint(x: rect.maxX, y: rect.midY + rect.height * 0.18),
+            control2: CGPoint(x: rect.maxX - rect.width * 0.18, y: rect.maxY - rect.height * 0.18)
+        )
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct PinyinCandidateUtilityIconStrip: View {
+    let dismissKeyboard: () -> Void
+    let openQuickFillPanel: () -> Void
+    let openTranslationPanel: () -> Void
+
+    private var items: [PinyinUtilityIconItem] {
+        [
+            .init(assetName: "icons8-diversity-50", fallbackSystemName: "person.2", accessibilityLabel: "Function", action: nil),
+            .init(assetName: "文本", fallbackSystemName: "textformat", accessibilityLabel: "Quick fill", action: openQuickFillPanel),
+            .init(assetName: "翻译", fallbackSystemName: "text.translate", accessibilityLabel: "Translate", action: openTranslationPanel),
+            .init(assetName: "icons8-happy-50", fallbackSystemName: "face.smiling", accessibilityLabel: "Cursor", action: nil),
+            .init(assetName: "icons8-happy-50", fallbackSystemName: "face.smiling", accessibilityLabel: "Emoji", action: nil),
+            .init(assetName: "icons8-expand-arrow-50", fallbackSystemName: "chevron.down", accessibilityLabel: "Dismiss keyboard", action: dismissKeyboard)
+        ]
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(items) { item in
+                PinyinUtilityIconButton(item: item)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .top)
+    }
+}
+
+private struct PinyinTranslationPanel: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+
+    var body: some View {
+        VStack(spacing: 10) {
+            header
+            resultArea
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.secondarySystemBackground))
+        .clipped()
+    }
+
+    private var header: some View {
+        ZStack {
+            Text("翻译")
+                .font(.system(size: 16, weight: .semibold))
+
+            HStack(spacing: 8) {
+                Button {
+                    pinyinState.setTranslationPanelVisible(false)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回键盘")
+
+                Spacer(minLength: 0)
+
+                Text(pinyinState.translationStatusText)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(statusForegroundColor)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(statusBackgroundColor, in: Capsule())
+                    .opacity(pinyinState.translationStatusText.isEmpty ? 0 : 1)
+            }
+        }
+        .frame(height: 34)
+    }
+
+    private var resultArea: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            Text(displayText)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(resultForegroundColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+    }
+
+    private var displayText: String {
+        if pinyinState.translationText.isEmpty {
+            return "正在读取粘贴板并请求翻译..."
+        }
+        return pinyinState.translationText
+    }
+
+    private var resultForegroundColor: Color {
+        pinyinState.translationText.isEmpty ? .secondary : .primary
+    }
+
+    private var statusForegroundColor: Color {
+        switch pinyinState.translationStatusText {
+        case "失败", "配置错误", "请求错误":
+            return .red
+        case "完成":
+            return .green
+        default:
+            return .secondary
+        }
+    }
+
+    private var statusBackgroundColor: Color {
+        statusForegroundColor.opacity(0.12)
+    }
+}
+
+private struct PinyinQuickFillPanel: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+    @State private var openedActionItem: String?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            header
+
+            if pinyinState.quickFillItems.isEmpty {
+                quickFillEmptyState
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 8) {
+                        ForEach(pinyinState.quickFillItems, id: \.self) { item in
+                            PinyinSwipeableQuickFillItemCard(
+                                item: item,
+                                isOpen: openedActionItem == item,
+                                insertText: {
+                                    if openedActionItem == item {
+                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                            openedActionItem = nil
+                                        }
+                                    } else {
+                                        insertText(item)
+                                    }
+                                },
+                                edit: {
+                                    openedActionItem = nil
+                                    pinyinState.beginEditingQuickFillItem(item)
+                                },
+                                delete: {
+                                    openedActionItem = nil
+                                    pinyinState.deleteQuickFillItem(item)
+                                },
+                                setOpen: { isOpen in
+                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                        openedActionItem = isOpen ? item : nil
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.secondarySystemBackground))
+        .clipped()
+    }
+
+    private var header: some View {
+        ZStack {
+            Text("常用语")
+                .font(.system(size: 16, weight: .semibold))
+
+            HStack {
+                Button {
+                    pinyinState.setQuickFillPanelVisible(false)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回键盘")
+
+                Spacer(minLength: 0)
+
+                Button {
+                    pinyinState.showQuickFillAddInput()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private var quickFillEmptyState: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 10) {
+                emptyStateIcon
+                    .frame(width: 29, height: 29)
+
+                Text("暂无常用语")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("点击右上角 + 添加常用语")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(
+                width: proxy.size.width * 0.9,
+                height: proxy.size.height * 0.9
+            )
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateIcon: some View {
+        Group {
+            if let image = PinyinKeyboardImageLoader.image(named: "快速添加 ") {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "plus.message")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+            }
+        }
+    }
+
+}
+
+private struct PinyinSwipeableQuickFillItemCard: View {
+    let item: String
+    let isOpen: Bool
+    let insertText: () -> Void
+    let edit: () -> Void
+    let delete: () -> Void
+    let setOpen: (Bool) -> Void
+
+    @State private var dragOffset: CGFloat = 0
+
+    private let actionWidth: CGFloat = 136
+    private let actionButtonWidth: CGFloat = 64
+    private let cardCornerRadius: CGFloat = 14
+    private let openThreshold: CGFloat = 44
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if shouldShowActionButtons {
+                actionButtons
+            }
+
+            itemCard
+                .offset(x: cardOffset)
+                .highPriorityGesture(dragGesture)
+        }
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isOpen)
+        .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.9), value: dragOffset)
+    }
+
+    private var cardOffset: CGFloat {
+        min(0, max(-actionWidth, (isOpen ? -actionWidth : 0) + dragOffset))
+    }
+
+    private var shouldShowActionButtons: Bool {
+        isOpen || dragOffset < 0
+    }
+
+    private var itemCard: some View {
+        Text(item)
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 3)
+            .contentShape(Rectangle())
+            .onTapGesture {
+            insertText()
+            }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 0) {
+            actionButton(
+                title: "编辑",
+                systemName: "pencil",
+                color: Color(red: 0.20, green: 0.48, blue: 0.94),
+                action: edit
+            )
+
+            actionButton(
+                title: "删除",
+                systemName: "trash",
+                color: Color(red: 1.00, green: 0.23, blue: 0.19),
+                action: delete
+            )
+        }
+        .frame(width: actionWidth, alignment: .trailing)
+        .background(Color.clear)
+    }
+
+    private func actionButton(
+        title: String,
+        systemName: String,
+        color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemName)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(width: actionButtonWidth)
+            .frame(maxHeight: .infinity)
+            .background(color)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                let translation = value.translation.width
+                if isOpen {
+                    dragOffset = min(actionWidth, max(0, translation))
+                } else {
+                    dragOffset = max(-actionWidth, min(0, translation))
+                }
+            }
+            .onEnded { value in
+                let translation = value.translation.width
+                let predictedTranslation = value.predictedEndTranslation.width
+                let shouldOpen = isOpen
+                    ? predictedTranslation > openThreshold ? false : true
+                    : predictedTranslation < -openThreshold || translation < -openThreshold
+                dragOffset = 0
+                setOpen(shouldOpen)
+            }
+    }
+}
+
+private struct PinyinQuickFillAddBar: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+
+    var body: some View {
+        VStack(spacing: 6) {
+            topRow
+            inputRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 7)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.secondarySystemBackground))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 0.5)
+        }
+    }
+
+    private var topRow: some View {
+        ZStack {
+            // Image(systemName: "plus.circle.fill")
+            //     .font(.system(size: 16, weight: .semibold))
+            //     .foregroundStyle(Color.accentColor)
+
+            Text("添加常用语")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            // Text("使用下方键盘输入，保存后置顶")
+            //     .font(.system(size: 12, weight: .regular))
+            //     .foregroundStyle(.secondary)
+            //     .lineLimit(1)
+            //     .minimumScaleFactor(0.75)
+
+            HStack {
+                Spacer(minLength: 0)
+
+                Button {
+                    pinyinState.returnToQuickFillPanel()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(height: 24)
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 8) {
+            focusedInputField
+
+            Button("保存") {
+                pinyinState.saveQuickFillDraft()
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 54, height: 34)
+            .background(saveButtonBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .buttonStyle(.plain)
+            .disabled(isDraftEmpty)
+        }
+    }
+
+    private var focusedInputField: some View {
+        PinyinQuickFillStableInputField(
+            draftPrefixText: draftPrefixText,
+            compositionPrefixText: compositionPrefixText,
+            compositionSuffixText: compositionSuffixText,
+            draftSuffixText: draftSuffixText,
+            fullText: activeInputText,
+            setDraftCursorOffset: { offset in
+                pinyinState.setQuickFillDraftCursorOffset(offset)
+            }
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+    }
+
+    private var activeInputText: String {
+        draftPrefixText + pinyinState.displayText + draftSuffixText
+    }
+
+    private var clampedDraftCursorOffset: Int {
+        max(0, min(pinyinState.quickFillDraftCursorOffset, pinyinState.quickFillDraftText.count))
+    }
+
+    private var draftPrefixText: String {
+        let end = pinyinState.quickFillDraftText.index(
+            pinyinState.quickFillDraftText.startIndex,
+            offsetBy: clampedDraftCursorOffset
+        )
+        return String(pinyinState.quickFillDraftText[..<end])
+    }
+
+    private var draftSuffixText: String {
+        let start = pinyinState.quickFillDraftText.index(
+            pinyinState.quickFillDraftText.startIndex,
+            offsetBy: clampedDraftCursorOffset
+        )
+        return String(pinyinState.quickFillDraftText[start...])
+    }
+
+    private var clampedCompositionCursorOffset: Int {
+        max(0, min(pinyinState.displayCursorOffset, pinyinState.displayText.count))
+    }
+
+    private var compositionPrefixText: String {
+        guard pinyinState.hasComposition else { return "" }
+        let end = pinyinState.displayText.index(
+            pinyinState.displayText.startIndex,
+            offsetBy: clampedCompositionCursorOffset
+        )
+        return String(pinyinState.displayText[..<end])
+    }
+
+    private var compositionSuffixText: String {
+        guard pinyinState.hasComposition else { return "" }
+        let start = pinyinState.displayText.index(
+            pinyinState.displayText.startIndex,
+            offsetBy: clampedCompositionCursorOffset
+        )
+        return String(pinyinState.displayText[start...])
+    }
+
+    private var isDraftEmpty: Bool {
+        pinyinState.quickFillDraftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !pinyinState.hasComposition
+    }
+
+    private var saveButtonBackground: Color {
+        isDraftEmpty ? Color.gray.opacity(0.35) : Color.accentColor
+    }
+
+}
+
+private final class OllamaTranslationStreamDelegate: NSObject, URLSessionDataDelegate {
+    private let onToken: (String) -> Void
+    private let onComplete: (String?) -> Void
+    private var lineBuffer = ""
+    private var didComplete = false
+
+    init(
+        onToken: @escaping (String) -> Void,
+        onComplete: @escaping (String?) -> Void
+    ) {
+        self.onToken = onToken
+        self.onComplete = onComplete
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        guard let chunk = String(data: data, encoding: .utf8) else { return }
+        lineBuffer += chunk
+        processBufferedLines(flushRemainder: false)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        processBufferedLines(flushRemainder: true)
+        if let error,
+           (error as NSError).code != NSURLErrorCancelled {
+            complete(error.localizedDescription)
+        } else {
+            complete(nil)
+        }
+        session.finishTasksAndInvalidate()
+    }
+
+    private func processBufferedLines(flushRemainder: Bool) {
+        let separator = CharacterSet.newlines
+        var lines = lineBuffer.components(separatedBy: separator)
+        if !flushRemainder {
+            lineBuffer = lines.popLast() ?? ""
+        } else {
+            lineBuffer = ""
+        }
+
+        for line in lines {
+            processLine(line.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
+    private func processLine(_ line: String) {
+        guard !line.isEmpty,
+              let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+
+        if let error = object["error"] as? String, !error.isEmpty {
+            complete(error)
+            return
+        }
+
+        if let token = object["response"] as? String, !token.isEmpty {
+            onToken(token)
+        }
+
+        if object["done"] as? Bool == true {
+            complete(nil)
+        }
+    }
+
+    private func complete(_ errorMessage: String?) {
+        guard !didComplete else { return }
+        didComplete = true
+        onComplete(errorMessage)
+    }
+}
+
+private struct PinyinQuickFillStableInputField: UIViewRepresentable {
+    let draftPrefixText: String
+    let compositionPrefixText: String
+    let compositionSuffixText: String
+    let draftSuffixText: String
+    let fullText: String
+    let setDraftCursorOffset: (Int) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(setDraftCursorOffset: setDraftCursorOffset)
+    }
+
+    func makeUIView(context: Context) -> StableInputTextView {
+        let view = StableInputTextView(frame: .zero, textContainer: nil)
+        view.delegate = context.coordinator
+        view.onSelectionChanged = { [weak coordinator = context.coordinator, weak view] in
+            guard let view else { return }
+            coordinator?.syncDraftCursorOffset(from: view)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: StableInputTextView, context: Context) {
+        context.coordinator.setDraftCursorOffset = setDraftCursorOffset
+        context.coordinator.draftPrefixLength = draftPrefixText.count
+        context.coordinator.compositionLength = compositionPrefixText.count + compositionSuffixText.count
+        context.coordinator.fullText = fullText
+
+        let cursorActiveOffset = draftPrefixText.count + compositionPrefixText.count
+        uiView.update(
+            text: fullText,
+            cursorCharacterOffset: cursorActiveOffset,
+            compositionRange: compositionRange(
+                draftPrefixLength: draftPrefixText.count,
+                compositionLength: compositionPrefixText.count + compositionSuffixText.count
+            )
+        )
+    }
+
+    private func compositionRange(draftPrefixLength: Int, compositionLength: Int) -> NSRange? {
+        guard compositionLength > 0 else { return nil }
+        let location = fullText.utf16Offset(forCharacterOffset: draftPrefixLength)
+        let end = fullText.utf16Offset(forCharacterOffset: draftPrefixLength + compositionLength)
+        return NSRange(location: location, length: max(0, end - location))
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var setDraftCursorOffset: (Int) -> Void
+        var draftPrefixLength = 0
+        var compositionLength = 0
+        var fullText = ""
+
+        init(setDraftCursorOffset: @escaping (Int) -> Void) {
+            self.setDraftCursorOffset = setDraftCursorOffset
+        }
+
+        func syncDraftCursorOffset(from textView: UITextView) {
+            let activeUTF16Offset: Int
+            if let selectedRange = textView.selectedTextRange {
+                activeUTF16Offset = textView.offset(from: textView.beginningOfDocument, to: selectedRange.start)
+            } else {
+                activeUTF16Offset = fullText.utf16.count
+            }
+            let activeOffset = fullText.characterOffset(forUTF16Offset: activeUTF16Offset)
+
+            let draftOffset: Int
+            if activeOffset <= draftPrefixLength {
+                draftOffset = activeOffset
+            } else if activeOffset <= draftPrefixLength + compositionLength {
+                // 组合输入期间不允许把草稿光标插入拼音组合串内部，避免候选上屏后位置错乱。
+                draftOffset = draftPrefixLength
+            } else {
+                draftOffset = activeOffset - compositionLength
+            }
+            setDraftCursorOffset(draftOffset)
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldChangeTextIn range: NSRange,
+            replacementText text: String
+        ) -> Bool {
+            // 输入内容统一由自定义键盘状态管理，这里只允许 UITextView 提供多行布局与真实光标定位。
+            false
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            if let stableTextView = textView as? StableInputTextView,
+               stableTextView.isApplyingSelectionUpdate {
+                return
+            }
+            syncDraftCursorOffset(from: textView)
+        }
+    }
+
+    final class StableInputTextView: UITextView {
+        var onSelectionChanged: (() -> Void)?
+
+        private let horizontalPadding: CGFloat = 10
+        private let verticalPadding: CGFloat = 7
+        private let counterWidth: CGFloat = 38
+        private let inputFont = UIFont.systemFont(ofSize: 15, weight: .regular)
+        private let countFont = UIFont.systemFont(ofSize: 11, weight: .regular)
+        private let countLabel = UILabel()
+        private let placeholderLabel = UILabel()
+        private var lastAppliedText = ""
+        private var isApplyingUpdate = false
+        private var pendingCursorCharacterOffset = 0
+
+        var isApplyingSelectionUpdate: Bool { isApplyingUpdate }
+
+        override init(frame: CGRect, textContainer: NSTextContainer?) {
+            super.init(frame: frame, textContainer: textContainer)
+            setupView()
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            setupView()
+        }
+
+        private func setupView() {
+            backgroundColor = .systemBackground
+            layer.cornerRadius = 10
+            layer.cornerCurve = .continuous
+            layer.borderWidth = 1.2
+            layer.borderColor = UIColor.tintColor.withAlphaComponent(0.82).cgColor
+            clipsToBounds = true
+
+            font = inputFont
+            textColor = .label
+            tintColor = .tintColor
+            backgroundColor = .systemBackground
+            autocorrectionType = .no
+            autocapitalizationType = .none
+            spellCheckingType = .no
+            smartDashesType = .no
+            smartQuotesType = .no
+            smartInsertDeleteType = .no
+            isEditable = true
+            isSelectable = true
+            isScrollEnabled = true
+            showsVerticalScrollIndicator = false
+            showsHorizontalScrollIndicator = false
+            alwaysBounceVertical = false
+            keyboardDismissMode = .none
+            inputView = UIView(frame: .zero)
+            inputAccessoryView = UIView(frame: .zero)
+            textContainer.lineFragmentPadding = 0
+            textContainerInset = UIEdgeInsets(
+                top: verticalPadding,
+                left: horizontalPadding,
+                bottom: verticalPadding + 10,
+                right: horizontalPadding
+            )
+
+            placeholderLabel.text = "输入常用语内容"
+            placeholderLabel.font = inputFont
+            placeholderLabel.textColor = .placeholderText
+            placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+            placeholderLabel.isUserInteractionEnabled = false
+            addSubview(placeholderLabel)
+
+            countLabel.font = countFont
+            countLabel.textColor = .tertiaryLabel
+            countLabel.textAlignment = .right
+            countLabel.translatesAutoresizingMaskIntoConstraints = false
+            countLabel.isUserInteractionEnabled = false
+            addSubview(countLabel)
+
+            NSLayoutConstraint.activate([
+                countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -horizontalPadding),
+                countLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+                countLabel.widthAnchor.constraint(equalToConstant: counterWidth),
+
+                placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: horizontalPadding),
+                placeholderLabel.topAnchor.constraint(equalTo: topAnchor, constant: verticalPadding),
+                placeholderLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -8)
+            ])
+        }
+
+        func update(text: String, cursorCharacterOffset: Int, compositionRange: NSRange?) {
+            isApplyingUpdate = true
+            pendingCursorCharacterOffset = max(0, min(cursorCharacterOffset, text.count))
+
+            if lastAppliedText != text {
+                attributedText = attributedText(for: text, compositionRange: compositionRange)
+                lastAppliedText = text
+            } else if let compositionRange {
+                attributedText = attributedText(for: text, compositionRange: compositionRange)
+            }
+            countLabel.text = "\(text.count)"
+            placeholderLabel.isHidden = !text.isEmpty
+            setCursor(characterOffset: pendingCursorCharacterOffset, in: text)
+            scrollRangeToVisible(selectedRange)
+            isApplyingUpdate = false
+        }
+
+        override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+            // 不显示系统选区手柄，只保留插入光标，避免用户误以为可以系统编辑/粘贴。
+            []
+        }
+
+        override func caretRect(for position: UITextPosition) -> CGRect {
+            var rect = super.caretRect(for: position)
+            rect.size.width = 1.5
+            rect.size.height = 18
+            rect.origin.y += max(0, (inputFont.lineHeight - rect.height) / 2)
+            return rect
+        }
+
+        override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+            false
+        }
+
+        private func attributedText(for text: String, compositionRange: NSRange?) -> NSAttributedString {
+            let attributed = NSMutableAttributedString(
+                string: text,
+                attributes: [
+                    .font: inputFont,
+                    .foregroundColor: UIColor.label
+                ]
+            )
+            if let compositionRange,
+               compositionRange.location >= 0,
+               compositionRange.location + compositionRange.length <= attributed.length {
+                attributed.addAttributes([
+                    .foregroundColor: UIColor.tintColor,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue
+                ], range: compositionRange)
+            }
+            return attributed
+        }
+
+        private func setCursor(characterOffset: Int, in text: String) {
+            let utf16Offset = text.utf16Offset(forCharacterOffset: characterOffset)
+            selectedRange = NSRange(location: max(0, min(utf16Offset, text.utf16.count)), length: 0)
+        }
+    }
+}
+
+private extension String {
+    func utf16Offset(forCharacterOffset characterOffset: Int) -> Int {
+        let clampedOffset = max(0, min(characterOffset, count))
+        let index = self.index(startIndex, offsetBy: clampedOffset)
+        guard let utf16Index = index.samePosition(in: utf16) else { return utf16.count }
+        return utf16.distance(from: utf16.startIndex, to: utf16Index)
+    }
+
+    func characterOffset(forUTF16Offset utf16Offset: Int) -> Int {
+        let clampedOffset = max(0, min(utf16Offset, utf16.count))
+        let utf16Index = utf16.index(utf16.startIndex, offsetBy: clampedOffset)
+        guard let stringIndex = String.Index(utf16Index, within: self) else {
+            return count
+        }
+        return distance(from: startIndex, to: stringIndex)
+    }
+}
+
+private struct PinyinUtilityIconItem: Identifiable {
+    let id = UUID()
+    let assetName: String
+    let fallbackSystemName: String
+    let accessibilityLabel: String
+    let action: (() -> Void)?
+}
+
+private struct PinyinUtilityIconButton: View {
+    let item: PinyinUtilityIconItem
+
+    var body: some View {
+        Button {
+            item.action?()
+        } label: {
+            icon
+                .resizable()
+                .scaledToFit()
+                .frame(width: PinyinKeyboardMetrics.utilityIconPointSize, height: PinyinKeyboardMetrics.utilityIconPointSize)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .top)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(item.action == nil)
+        .accessibilityLabel(item.accessibilityLabel)
+    }
+
+    private var icon: Image {
+        if let image = PinyinKeyboardImageLoader.image(named: item.assetName) {
+            return Image(uiImage: image.withRenderingMode(.alwaysTemplate))
+        }
+        return Image(systemName: item.fallbackSystemName)
+    }
+}
+
+private enum PinyinKeyboardImageLoader {
+    static func image(named name: String) -> UIImage? {
+        if let url = Bundle(for: KeyboardViewController.self).url(
+            forResource: name,
+            withExtension: "png",
+            subdirectory: "ios-icon"
+        ) {
+            return UIImage(contentsOfFile: url.path)
+        }
+        return UIImage(named: name)
+    }
+}
+
+private struct PinyinExpandedCandidateOverlay: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            collapseHeader
+
+            ScrollView(.vertical, showsIndicators: false) {
+                CandidateFlowLayout(spacing: 6) {
+                    ForEach(Array(pinyinState.candidates.enumerated()), id: \.element.id) { index, candidate in
+                        PinyinCandidateButton(
+                            candidate: candidate,
+                            index: index,
+                            expanded: true,
+                            pinyinState: pinyinState,
+                            insertText: insertText
+                        )
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.secondarySystemBackground))
+        .clipped()
+    }
+
+    private var collapseHeader: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button {
+                pinyinState.isCandidatePageVisible = false
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 32)
+                    .background(Color(.systemGray5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(width: PinyinKeyboardMetrics.candidateExpandHitWidth, height: PinyinKeyboardMetrics.candidateExpandHitHeight)
+                    // .background(Color.clear)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.trailing, 4)
+        .frame(height: PinyinKeyboardMetrics.candidateExpandHitHeight)
+        .background(Color(.secondarySystemBackground))
+    }
+}
+
+private struct PinyinCandidateButton: View {
+    let candidate: KeyboardInputCandidate
+    let index: Int
+    let expanded: Bool
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+
+    private var candidateFont: Font {
+        .custom("NotoSansCJKsc-Regular", size: 19)
+    }
+
+    var body: some View {
+        Button {
+            guard !pinyinState.isCandidateRefreshPending else { return }
+            if let committedText = pinyinState.select(candidate) {
+                if pinyinState.isQuickFillAddInputVisible {
+                    pinyinState.appendQuickFillDraftText(committedText)
+                } else {
+                    insertText(committedText)
+                }
+            }
+        } label: {
+            Text(candidate.text)
+                .font(candidateFont)
+                .fontWeight(index == 0 ? .semibold : .regular)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            .padding(.horizontal, 12)
+            .padding(.vertical, expanded ? PinyinKeyboardMetrics.expandedCandidateVerticalPadding : 2)
+            .frame(minWidth: expanded ? 56 : 48, minHeight: expanded ? PinyinKeyboardMetrics.expandedCandidateMinHitHeight : 30)
+            .background(expanded ? Color.primary.opacity(0.001) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(!pinyinState.isCandidateRefreshPending)
+    }
+}
+
+private struct PinyinCompositionCursorText: View {
+    let text: String
+    let cursorOffset: Int
+    let hasComposition: Bool
+
+    private let fontSize: CGFloat = 15
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                Text(prefixText)
+                    .font(.system(size: fontSize, weight: .regular))
+                    .foregroundStyle(hasComposition ? .primary : .secondary)
+                    .lineLimit(1)
+
+                if hasComposition {
+                    Rectangle()
+                        .fill(Color.primary)
+                        .frame(width: 1.5, height: 18)
+                }
+
+                Text(suffixText)
+                    .font(.system(size: fontSize, weight: .regular))
+                    .foregroundStyle(hasComposition ? .primary : .secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+    }
+
+    private var clampedCursorOffset: Int {
+        max(0, min(cursorOffset, text.count))
+    }
+
+    private var prefixText: String {
+        let end = text.index(text.startIndex, offsetBy: clampedCursorOffset)
+        return String(text[..<end])
+    }
+
+    private var suffixText: String {
+        let start = text.index(text.startIndex, offsetBy: clampedCursorOffset)
+        return String(text[start...])
+    }
+}
+
+private struct CandidateFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let maxWidth = max(56, proposal.width ?? 320)
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let width = min(max(size.width, 56), maxWidth)
+            let height = max(size.height, 34)
+            let candidateSpacing = rowWidth == 0 ? 0 : spacing
+
+            if rowWidth > 0 && rowWidth + candidateSpacing + width > maxWidth {
+                totalHeight += rowHeight + spacing
+                rowWidth = 0
+                rowHeight = 0
+            }
+
+            rowWidth += (rowWidth == 0 ? 0 : spacing) + width
+            rowHeight = max(rowHeight, height)
+        }
+
+        if rowHeight > 0 {
+            totalHeight += rowHeight
+        }
+        return CGSize(width: maxWidth, height: totalHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let maxWidth = max(56, bounds.width)
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let width = min(max(size.width, 56), maxWidth)
+            let height = max(size.height, 34)
+            let candidateSpacing = x == bounds.minX ? 0 : spacing
+
+            if x > bounds.minX && x + candidateSpacing + width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            } else if x > bounds.minX {
+                x += spacing
+            }
+
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                proposal: ProposedViewSize(width: width, height: height)
+            )
+            x += width
+            rowHeight = max(rowHeight, height)
+        }
+    }
+}

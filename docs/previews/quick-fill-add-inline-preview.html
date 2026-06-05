@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>添加常用语内联输入预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --screen-bg: #f4f5f8;
+      --keyboard-bg: rgba(186, 191, 199, 0.72);
+      --card-bg: #fafafd;
+      --input-bg: #f2f2f4;
+      --key-bg: #ffffff;
+      --special-key-bg: #abb2bd;
+      --text: #111111;
+      --secondary: #5a5a5f;
+      --border: rgba(0, 0, 0, 0.06);
+      --blue: #007aff;
+      --shadow: rgba(0, 0, 0, 0.42);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(0, 122, 255, 0.12), transparent 28rem),
+        linear-gradient(180deg, #fbfbfd, var(--screen-bg));
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+    }
+
+    .stage {
+      width: min(430px, 100vw);
+      padding: 18px;
+    }
+
+    .phone {
+      width: 390px;
+      max-width: 100%;
+      margin: 0 auto;
+      border-radius: 34px;
+      padding: 14px;
+      background: #111;
+      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.26);
+    }
+
+    .screen {
+      position: relative;
+      height: 720px;
+      overflow: hidden;
+      border-radius: 24px;
+      background: linear-gradient(180deg, #ffffff 0%, #f3f4f7 100%);
+    }
+
+    .app-content {
+      height: 342px;
+      padding: 28px 20px;
+      color: #8d9098;
+    }
+
+    .input-card {
+      margin-top: 64px;
+      height: 46px;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid rgba(0, 0, 0, 0.05);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 15px;
+    }
+
+    .keyboard {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 378px;
+      background: var(--keyboard-bg);
+      padding: 6px 4px 6px;
+      backdrop-filter: blur(18px);
+    }
+
+    /* 对应 Swift: quickFillAddInlineView.heightAnchor = 118 */
+    .add-inline {
+      height: 118px;
+      background: transparent;
+      margin-bottom: 7px;
+    }
+
+    /* 对应 Swift: quickFillAddInlineCardView 左右各 2pt，上下贴齐 */
+    .add-card {
+      height: 118px;
+      margin: 0 2px;
+      border-radius: 14px;
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .back-button {
+      position: absolute;
+      left: 6px;
+      top: 5px;
+      width: 32px;
+      height: 32px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text);
+      font-size: 30px;
+      line-height: 28px;
+      padding: 0;
+    }
+
+    .title {
+      position: absolute;
+      top: 10px;
+      left: 84px;
+      right: 84px;
+      height: 22px;
+      text-align: center;
+      font-size: 17px;
+      font-weight: 650;
+      line-height: 22px;
+    }
+
+    .save-button {
+      position: absolute;
+      right: 10px;
+      top: 6px;
+      width: 58px;
+      height: 30px;
+      border: 0;
+      border-radius: 15px;
+      background: var(--blue);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .save-button.disabled {
+      opacity: 0.45;
+    }
+
+    .text-box {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: 44px;
+      bottom: 10px;
+      border-radius: 12px;
+      border: 0.5px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.35;
+      padding: 10px;
+      overflow: hidden;
+    }
+
+    .placeholder {
+      color: rgba(90, 90, 95, 0.55);
+    }
+
+    .candidate-bar {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 6px;
+      color: var(--secondary);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .candidate {
+      font-size: 19px;
+      color: var(--text);
+      padding: 2px 10px;
+    }
+
+    .rows {
+      display: grid;
+      gap: 12px;
+      margin-top: 7px;
+    }
+
+    .row {
+      display: grid;
+      gap: 6px;
+      height: 42px;
+    }
+
+    .row.r1 { grid-template-columns: repeat(10, 1fr); }
+    .row.r2 { grid-template-columns: 0.5fr repeat(9, 1fr) 0.5fr; }
+    .row.r3 { grid-template-columns: 42px 0.5fr repeat(7, 1fr) 0.5fr 42px; }
+    .row.r4 { grid-template-columns: 1.35fr 3.55fr 1fr 1.55fr; }
+
+    .key {
+      border-radius: 6px;
+      background: var(--key-bg);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      font-weight: 300;
+      color: #111;
+      box-shadow: 0 1px 0 var(--shadow);
+    }
+
+    .key.special {
+      background: var(--special-key-bg);
+      font-size: 15px;
+      font-weight: 400;
+    }
+
+    .spacer { background: transparent; }
+
+    .toggle {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 14px;
+    }
+
+    .toggle button {
+      height: 34px;
+      border: 0;
+      border-radius: 17px;
+      padding: 0 14px;
+      background: #fff;
+      color: #343840;
+      font-size: 13px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+      cursor: pointer;
+    }
+
+    .toggle button.active {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .hint {
+      margin: 12px auto 0;
+      max-width: 390px;
+      color: #666b76;
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="phone" aria-label="iPhone 添加常用语内联输入预览">
+      <div class="screen">
+        <div class="app-content">
+          <div>点击“添加常用语”后，不弹系统输入框，而是在键盘上方显示内联输入卡片。</div>
+          <div class="input-card">App 输入框内容不会被插入</div>
+        </div>
+
+        <div class="keyboard">
+          <section class="add-inline" aria-label="添加常用语内联区域">
+            <div class="add-card">
+              <button class="back-button" aria-label="取消">‹</button>
+              <div class="title">添加常用语</div>
+              <button class="save-button disabled" id="save">保存</button>
+              <div class="text-box" id="textbox"><span class="placeholder">输入常用语内容</span></div>
+            </div>
+          </section>
+
+          <div class="candidate-bar" aria-label="候选栏">
+            <span class="candidate">你好</span>
+            <span class="candidate">你们</span>
+            <span class="candidate">你</span>
+          </div>
+
+          <div class="rows" aria-hidden="true">
+            <div class="row r1">q w e r t y u i o p</div>
+            <div class="row r2"><i></i>a s d f g h j k l<i></i></div>
+            <div class="row r3"><b>⇧</b><i></i>z x c v b n m<i></i><b>⌫</b></div>
+            <div class="row r4"><b>123</b><b>空格</b><b>中/英</b><b>保存</b></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="toggle" aria-label="预览状态切换">
+      <button class="active" id="empty">空内容</button>
+      <button id="filled">已输入内容</button>
+    </div>
+    <p class="hint">背景方框高度为 118pt；卡片左右各 2pt，标题距顶部 10pt，输入框从标题下方 12pt 开始到底部 10pt。</p>
+  </main>
+
+  <script>
+    document.querySelectorAll('.row').forEach(row => {
+      const tokens = row.childNodes.length === 1 ? row.textContent.trim().split(/\s+/) : [];
+      if (!tokens.length) return;
+      row.textContent = '';
+      tokens.forEach(token => {
+        const key = document.createElement('div');
+        key.className = 'key';
+        key.textContent = token;
+        row.appendChild(key);
+      });
+    });
+    document.querySelectorAll('.row i').forEach(el => el.className = 'spacer');
+    document.querySelectorAll('.row b').forEach(el => el.className = 'key special');
+
+    const emptyButton = document.querySelector('#empty');
+    const filledButton = document.querySelector('#filled');
+    const textBox = document.querySelector('#textbox');
+    const save = document.querySelector('#save');
+
+    function setFilled(filled) {
+      emptyButton.classList.toggle('active', !filled);
+      filledButton.classList.toggle('active', filled);
+      save.classList.toggle('disabled', !filled);
+      textBox.innerHTML = filled
+        ? '你好，今天下午 3 点方便沟通吗？'
+        : '<span class="placeholder">输入常用语内容</span>';
+    }
+
+    emptyButton.addEventListener('click', () => setFilled(false));
+    filledButton.addEventListener('click', () => setFilled(true));
+  </script>
+</body>
+</html>

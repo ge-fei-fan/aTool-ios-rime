@@ -1,0 +1,14 @@
+# Rime dictionary
+# encoding: utf-8
+
+---
+name: wanxiang_ios
+version: "LTS-iOS"
+sort: by_weight
+use_preset_vocabulary: false
+import_tables:
+  # iOS 键盘扩展内存预算很小，只预加载最核心的字/基础词。
+  # 不引入联想、诗词、地名等大词库，避免启动时加载 70MB+ table 被系统杀掉。
+  - dicts/zi
+  - dicts/jichu
+...
