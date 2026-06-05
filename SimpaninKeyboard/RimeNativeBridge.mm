@@ -279,6 +279,7 @@ static NSError *RimeNativeError(NSInteger code, NSString *message) {
     }
 
     NSString *preedit = @"";
+    NSInteger selectedSegmentEnd = 0;
     if (_api->get_context) {
         RIME_STRUCT(RimeContext, context);
         if (_api->get_context(_sessionID, &context)) {
@@ -286,11 +287,18 @@ static NSError *RimeNativeError(NSInteger code, NSString *message) {
                 preedit = [NSString stringWithUTF8String:context.composition.preedit] ?: @"";
             }
             caretPosition = context.composition.cursor_pos;
+            selectedSegmentEnd = context.composition.sel_end;
             if (_api->free_context) {
                 _api->free_context(&context);
             }
         }
     }
+
+    NSInteger candidateConsumeLength = input.length;
+    if (selectedSegmentEnd > 0) {
+        candidateConsumeLength = MIN((NSInteger)input.length, selectedSegmentEnd);
+    }
+    candidateConsumeLength = MAX(1, candidateConsumeLength);
 
     NSMutableArray<RimeNativeCandidate *> *candidates = [NSMutableArray array];
     if (_api->candidate_list_begin && _api->candidate_list_next && _api->candidate_list_end) {
@@ -302,7 +310,7 @@ static NSError *RimeNativeError(NSInteger code, NSString *message) {
                 RimeNativeCandidate *candidate = [[RimeNativeCandidate alloc] initWithText:text
                                                                                   comment:comment
                                                                                     index:iterator.index
-                                                                            consumeLength:MAX(1, (NSInteger)input.length)];
+                                                                            consumeLength:candidateConsumeLength];
                 [candidates addObject:candidate];
                 if (candidates.count >= 50) {
                     break;

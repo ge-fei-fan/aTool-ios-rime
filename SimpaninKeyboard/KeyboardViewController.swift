@@ -157,6 +157,11 @@ private enum RimeDataPreparationError: LocalizedError {
 }
 
 private final class PinyinKeyboardInputState: ObservableObject {
+    private struct PartialSelectionStep: Equatable {
+        let committedText: String
+        let consumedRawPinyin: String
+    }
+
     private static let candidateRefreshDelay: TimeInterval = 0.012
     private static let rimeStartupDelay: TimeInterval = 0.85
     private static let sharedDefaultsSuiteName = "group.com.local.fitnex"
@@ -186,6 +191,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private var candidateRefreshWorkItem: DispatchWorkItem?
     private var candidateRefreshGeneration = 0
     private var appliedCandidateGeneration = 0
+    private var partialSelectionSteps: [PartialSelectionStep] = []
 
     @Published private(set) var displayText = ""
     @Published private(set) var rawPinyinText = ""
@@ -276,6 +282,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         isRimeInitializationInProgress = true
         rimeInitializationWorkItem?.cancel()
         cancelPendingCandidateRefresh(clearCandidates: true)
+        clearPartialSelection()
         engine.clearComposition()
         refreshPublishedComposition()
         Self.logInputEngineInfo(
@@ -350,6 +357,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         // still winding down. Touching librime during that transition can race
         // with the next keyboard instance and make the extension exit, which
         // appears to users as a brief flash back to the previous keyboard.
+        clearPartialSelection()
         displayText = ""
         rawPinyinText = ""
         displayCursorOffset = 0
@@ -586,6 +594,140 @@ private final class PinyinKeyboardInputState: ObservableObject {
         try? fileManager.removeItem(at: deploymentMarkerURL)
     }
 
+    private static func splitRawPinyin(
+        afterConsuming consumeLength: Int,
+        from rawPinyin: String
+    ) -> (consumed: String, remaining: String) {
+        guard consumeLength > 0 else { return ("", rawPinyin) }
+        guard consumeLength < rawPinyin.count else { return (rawPinyin, "") }
+        let splitIndex = rawPinyin.index(rawPinyin.startIndex, offsetBy: consumeLength)
+        return (
+            String(rawPinyin[..<splitIndex]),
+            String(rawPinyin[splitIndex...])
+        )
+    }
+
+    private static func splitRawPinyinAfterCandidateSelection(
+        _ candidate: KeyboardInputCandidate,
+        selectedText: String?,
+        rawPinyinBeforeSelect: String,
+        rawPinyinAfterSelect: String
+    ) -> (consumed: String, remaining: String) {
+        if let consumeLength = consumeLengthFromSelectionRemainder(
+            rawPinyinBeforeSelect: rawPinyinBeforeSelect,
+            rawPinyinAfterSelect: rawPinyinAfterSelect
+        ) {
+            return splitRawPinyin(afterConsuming: consumeLength, from: rawPinyinBeforeSelect)
+        }
+
+        if let consumeLength = inferredPinyinConsumeLength(
+            for: selectedText,
+            from: rawPinyinBeforeSelect
+        ) {
+            return splitRawPinyin(afterConsuming: consumeLength, from: rawPinyinBeforeSelect)
+        }
+
+        return splitRawPinyin(afterConsuming: candidate.consumeLength, from: rawPinyinBeforeSelect)
+    }
+
+    private static func consumeLengthFromSelectionRemainder(
+        rawPinyinBeforeSelect: String,
+        rawPinyinAfterSelect: String
+    ) -> Int? {
+        guard !rawPinyinAfterSelect.isEmpty,
+              rawPinyinAfterSelect.count < rawPinyinBeforeSelect.count,
+              rawPinyinBeforeSelect.hasSuffix(rawPinyinAfterSelect) else {
+            return nil
+        }
+
+        return rawPinyinBeforeSelect.count - rawPinyinAfterSelect.count
+    }
+
+    private static func inferredPinyinConsumeLength(
+        for selectedText: String?,
+        from rawPinyin: String
+    ) -> Int? {
+        guard let selectedText,
+              !selectedText.isEmpty,
+              containsHanCharacter(in: selectedText),
+              isASCIIPinyinInput(rawPinyin) else {
+            return nil
+        }
+
+        let syllables = PinyinCompositionFormatter.segmentASCIILetters(rawPinyin)
+        guard syllables.count > 1,
+              syllables.joined().count == rawPinyin.count else {
+            return nil
+        }
+
+        let syllableCountToConsume = min(selectedText.count, syllables.count)
+        guard syllableCountToConsume > 0 else { return nil }
+        return syllables
+            .prefix(syllableCountToConsume)
+            .reduce(0) { length, syllable in length + syllable.count }
+    }
+
+    private static func containsHanCharacter(in text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            let value = scalar.value
+            return (value >= 0x3400 && value <= 0x4DBF)
+                || (value >= 0x4E00 && value <= 0x9FFF)
+                || (value >= 0xF900 && value <= 0xFAFF)
+                || (value >= 0x20000 && value <= 0x2CEAF)
+                || (value >= 0x30000 && value <= 0x3134F)
+        }
+    }
+
+    private static func isASCIIPinyinInput(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return text.unicodeScalars.allSatisfy { scalar in
+            (scalar.value >= 65 && scalar.value <= 90)
+                || (scalar.value >= 97 && scalar.value <= 122)
+        }
+    }
+
+    private var partialSelectionPrefixText: String {
+        partialSelectionSteps.reduce(into: "") { text, step in
+            text += step.committedText
+        }
+    }
+
+    private var partialSelectionRawPinyinPrefixText: String {
+        partialSelectionSteps.reduce(into: "") { text, step in
+            text += step.consumedRawPinyin
+        }
+    }
+
+    private func clearPartialSelection() {
+        partialSelectionSteps.removeAll()
+    }
+
+    private func resolvedCommittedText(
+        for candidate: KeyboardInputCandidate,
+        committedText: String?
+    ) -> String? {
+        if let committedText, !committedText.isEmpty {
+            return committedText
+        }
+        return candidate.text.isEmpty ? nil : candidate.text
+    }
+
+    private func finalizeCommittedText(_ committedText: String?) -> String? {
+        let prefixText = partialSelectionPrefixText
+        if let committedText, !committedText.isEmpty {
+            return prefixText + committedText
+        }
+        return prefixText.isEmpty ? committedText : prefixText
+    }
+
+    private func rebuildComposition(with rawPinyin: String) {
+        engine.clearComposition()
+        guard !rawPinyin.isEmpty else { return }
+        for scalar in rawPinyin.unicodeScalars {
+            engine.insertLetter(String(scalar))
+        }
+    }
+
     func insertLetter(_ letter: String) {
         hideQuickFillPanelIfNeeded()
         engine.insertLetter(letter)
@@ -596,6 +738,15 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func deleteBackward() -> Bool {
+        if let lastPartialSelection = partialSelectionSteps.popLast() {
+            let restoredRawPinyin = lastPartialSelection.consumedRawPinyin + engine.rawPinyin
+            rebuildComposition(with: restoredRawPinyin)
+            resetCandidateScrollPosition()
+            refreshPublishedComposition()
+            scheduleCandidateRefresh(resetCandidatesWhenEmpty: !engine.hasComposition)
+            return true
+        }
+
         let didDelete = engine.deleteBackward()
         if didDelete {
             resetCandidateScrollPosition()
@@ -607,33 +758,67 @@ private final class PinyinKeyboardInputState: ObservableObject {
 
     func select(_ candidate: KeyboardInputCandidate) -> String? {
         guard !isCandidateRefreshPending else { return nil }
+        let rawPinyinBeforeSelect = engine.rawPinyin
         let committedText = engine.select(candidate)
-        refreshPublishedComposition()
-        if committedText != nil {
+        let rawPinyinAfterSelect = engine.rawPinyin
+        let selectedText = resolvedCommittedText(for: candidate, committedText: committedText)
+        let splitRawPinyin = Self.splitRawPinyinAfterCandidateSelection(
+            candidate,
+            selectedText: selectedText,
+            rawPinyinBeforeSelect: rawPinyinBeforeSelect,
+            rawPinyinAfterSelect: rawPinyinAfterSelect
+        )
+
+        if !splitRawPinyin.remaining.isEmpty,
+           let selectedText,
+           !selectedText.isEmpty {
+            partialSelectionSteps.append(
+                PartialSelectionStep(
+                    committedText: selectedText,
+                    consumedRawPinyin: splitRawPinyin.consumed
+                )
+            )
+            rebuildComposition(with: splitRawPinyin.remaining)
+            resetCandidateScrollPosition()
+            refreshPublishedComposition()
+            scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
+            return nil
+        }
+
+        let finalCommittedText = finalizeCommittedText(selectedText ?? committedText)
+
+        if finalCommittedText != nil {
+            clearPartialSelection()
             hideCandidatePageIfNeeded()
         }
+        refreshPublishedComposition()
         scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
-        return committedText
+        return finalCommittedText
     }
 
     func commitCompositionAsText() -> String? {
         let text = engine.commitCompositionAsText()
+        let finalText = finalizeCommittedText(text)
+        clearPartialSelection()
         hideCandidatePageIfNeeded()
         refreshPublishedComposition()
         scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
-        return text
+        return finalText
     }
 
     func commitRawInputAsText() -> String? {
         let text = engine.commitRawInputAsText()
+        let finalText = finalizeCommittedText(text)
+        clearPartialSelection()
         hideCandidatePageIfNeeded()
         refreshPublishedComposition()
         scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
-        return text
+        return finalText
     }
 
     func toggleChineseInput() {
         isChineseInputEnabled.toggle()
+        clearPartialSelection()
         hideCandidatePageIfNeeded()
         refreshPublishedComposition()
         scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
@@ -1075,22 +1260,41 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private func refreshPublishedComposition() {
         updatePublishedEngineState()
 
-        let nextDisplayText = engine.displayText
+        let partialPrefixText = partialSelectionPrefixText
+        let engineDisplayText = engine.displayText
+        let nextDisplayText: String
+        if partialPrefixText.isEmpty {
+            nextDisplayText = engineDisplayText
+        } else if engine.hasComposition {
+            nextDisplayText = partialPrefixText + engineDisplayText
+        } else {
+            nextDisplayText = partialPrefixText
+        }
         if displayText != nextDisplayText {
             displayText = nextDisplayText
         }
 
-        let nextRawPinyinText = engine.rawPinyin
+        let partialRawPinyinPrefixText = partialSelectionRawPinyinPrefixText
+        let nextRawPinyinText = engine.hasComposition || !partialRawPinyinPrefixText.isEmpty
+            ? partialRawPinyinPrefixText + engine.rawPinyin
+            : ""
         if rawPinyinText != nextRawPinyinText {
             rawPinyinText = nextRawPinyinText
         }
 
-        let nextDisplayCursorOffset = engine.displayCursorOffset
+        let nextDisplayCursorOffset: Int
+        if partialPrefixText.isEmpty {
+            nextDisplayCursorOffset = engine.displayCursorOffset
+        } else if engine.hasComposition {
+            nextDisplayCursorOffset = partialPrefixText.count + engine.displayCursorOffset
+        } else {
+            nextDisplayCursorOffset = partialPrefixText.count
+        }
         if displayCursorOffset != nextDisplayCursorOffset {
             displayCursorOffset = nextDisplayCursorOffset
         }
 
-        let nextHasComposition = engine.hasComposition
+        let nextHasComposition = engine.hasComposition || !partialPrefixText.isEmpty
         if hasComposition != nextHasComposition {
             hasComposition = nextHasComposition
         }
@@ -2183,7 +2387,7 @@ private enum PinyinCompositionFormatter {
         return segmentASCIILetters(normalized).joined(separator: "'")
     }
 
-    private static func segmentASCIILetters(_ text: String) -> [String] {
+    static func segmentASCIILetters(_ text: String) -> [String] {
         let lowercased = text.lowercased()
         let characters = Array(lowercased)
         let count = characters.count

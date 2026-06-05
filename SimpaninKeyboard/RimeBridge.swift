@@ -360,7 +360,7 @@ final class RimeBridge {
             }
             collectPendingCommitText()
             let text = consumePendingCommitText()
-            rawTypedInput = ""
+            rawTypedInput = nativeBridge.currentContext()?.input ?? ""
             logCurrentState(action: "select", details: "index=\(index) success=true commit=\(text ?? "<nil>")")
             return text
         }
