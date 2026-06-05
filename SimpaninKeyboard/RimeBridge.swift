@@ -155,6 +155,7 @@ final class RimeBridge {
     private let nativeBridge = RimeNativeBridge()
     private let queue = DispatchQueue(label: "com.local.simpanin.keyboard.rime")
     private var pendingCommitText = ""
+    private var rawTypedInput = ""
 
     private(set) var isInitialized = false
     private(set) var lastError: RimeBridgeError?
@@ -185,6 +186,7 @@ final class RimeBridge {
                 )
                 isInitialized = false
                 pendingCommitText = ""
+                rawTypedInput = ""
             }
 
             guard RimeNativeBridge.nativeAvailable else {
@@ -221,6 +223,7 @@ final class RimeBridge {
                 let bridgeError = RimeBridgeError.initializationFailed(error.localizedDescription)
                 isInitialized = false
                 pendingCommitText = ""
+                rawTypedInput = ""
                 lastError = bridgeError
                 RimeDebugLogger.record("initialize failed error=\(error.localizedDescription)")
                 throw bridgeError
@@ -234,6 +237,7 @@ final class RimeBridge {
             nativeBridge.reset()
             nativeBridge.setOption("ascii_mode", enabled: false)
             pendingCommitText = ""
+            rawTypedInput = ""
             RimeDebugLogger.record("reset asciiMode=\(nativeBridge.getOption("ascii_mode"))")
         }
     }
@@ -243,6 +247,7 @@ final class RimeBridge {
             nativeBridge.shutdown()
             isInitialized = false
             pendingCommitText = ""
+            rawTypedInput = ""
             lastError = nil
             RimeDebugLogger.record("shutdown")
         }
@@ -251,10 +256,15 @@ final class RimeBridge {
     func insertLetter(_ letter: String) {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return }
-            guard let scalar = letter.unicodeScalars.first, letter.unicodeScalars.count == 1 else { return }
-            let didConsume = nativeBridge.processKeyCode(Int(scalar.value), mask: 0)
+            guard letter.unicodeScalars.count == 1 else { return }
+            let rimeLetter = normalizedLetterForRime(letter)
+            guard let rimeScalar = rimeLetter.unicodeScalars.first, rimeLetter.unicodeScalars.count == 1 else { return }
+            let didConsume = nativeBridge.processKeyCode(Int(rimeScalar.value), mask: 0)
+            if didConsume {
+                rawTypedInput.append(letter)
+            }
             collectPendingCommitText()
-            logCurrentState(action: "insert", details: "letter=\(letter) code=\(scalar.value) consumed=\(didConsume)")
+            logCurrentState(action: "insert", details: "letter=\(letter) rimeLetter=\(rimeLetter) code=\(rimeScalar.value) consumed=\(didConsume)")
         }
     }
 
@@ -262,6 +272,9 @@ final class RimeBridge {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return false }
             let didConsume = nativeBridge.processKeyCode(KeyCode.backspace, mask: 0)
+            if didConsume, !rawTypedInput.isEmpty {
+                rawTypedInput.removeLast()
+            }
             collectPendingCommitText()
             logCurrentState(action: "delete", details: "consumed=\(didConsume)")
             return didConsume
@@ -273,6 +286,7 @@ final class RimeBridge {
             guard isInitialized, nativeBridge.initialized else { return }
             nativeBridge.clearComposition()
             pendingCommitText = ""
+            rawTypedInput = ""
             logCurrentState(action: "clear", details: "")
         }
     }
@@ -287,6 +301,16 @@ final class RimeBridge {
     var rawInput: String {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return "" }
+            return nativeBridge.currentContext()?.input ?? ""
+        }
+    }
+
+    var rawTypedText: String {
+        queue.sync {
+            guard isInitialized, nativeBridge.initialized else { return "" }
+            if !rawTypedInput.isEmpty {
+                return rawTypedInput
+            }
             return nativeBridge.currentContext()?.input ?? ""
         }
     }
@@ -336,6 +360,7 @@ final class RimeBridge {
             }
             collectPendingCommitText()
             let text = consumePendingCommitText()
+            rawTypedInput = ""
             logCurrentState(action: "select", details: "index=\(index) success=true commit=\(text ?? "<nil>")")
             return text
         }
@@ -358,6 +383,30 @@ final class RimeBridge {
         }
     }
 
+    func commitRawInputAsText() -> String? {
+        queue.sync {
+            guard isInitialized, nativeBridge.initialized else { return nil }
+            let contextInput = nativeBridge.currentContext()?.input ?? ""
+            let text = rawTypedInput.isEmpty ? contextInput : rawTypedInput
+            guard !text.isEmpty else { return nil }
+            nativeBridge.clearComposition()
+            pendingCommitText = ""
+            rawTypedInput = ""
+            RimeDebugLogger.record("commitRawInput commit=\(text)")
+            return text
+        }
+    }
+
+    private func normalizedLetterForRime(_ letter: String) -> String {
+        guard letter.count == 1,
+              let scalar = letter.unicodeScalars.first,
+              scalar.value >= 65,
+              scalar.value <= 90 else {
+            return letter
+        }
+        return letter.lowercased()
+    }
+
     private func logCurrentState(action: String, details: String) {
         guard RimeDebugLogger.isEnabled else { return }
 
@@ -372,9 +421,9 @@ final class RimeBridge {
                 let comment = candidate.comment.map { "(\($0))" } ?? ""
                 return "#\(candidate.index):\(candidate.text)\(comment)"
             }
-            .joined(separator: "|")
+            .joined(separator: ",")
         RimeDebugLogger.record(
-            "\(action) \(details) raw=\(context.input) preedit=\(context.preedit) caret=\(context.caretPosition) candidates=\(candidateSummary.isEmpty ? "<empty>" : candidateSummary) pendingCommit=\(pendingCommitText.isEmpty ? "<empty>" : pendingCommitText)"
+            "\(action) \(details) raw=\(context.input) typed=\(rawTypedInput) preedit=\(context.preedit) caret=\(context.caretPosition) candidates=\(candidateSummary.isEmpty ? "<empty>" : candidateSummary) pendingCommit=\(pendingCommitText.isEmpty ? "<empty>" : pendingCommitText)"
         )
     }
 

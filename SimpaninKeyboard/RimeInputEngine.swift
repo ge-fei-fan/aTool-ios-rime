@@ -32,6 +32,7 @@ protocol KeyboardInputEngine {
     mutating func setDisplayCursorOffset(_ offset: Int)
     mutating func select(_ candidate: KeyboardInputCandidate) -> String?
     mutating func commitCompositionAsText() -> String?
+    mutating func commitRawInputAsText() -> String?
     mutating func shutdown()
 }
 
@@ -53,7 +54,7 @@ struct RimeInputEngine: KeyboardInputEngine {
     }
 
     var rawPinyin: String {
-        bridge.isAvailable ? bridge.rawInput : ""
+        bridge.isAvailable ? bridge.rawTypedText : ""
     }
 
     var displayText: String {
@@ -144,6 +145,13 @@ struct RimeInputEngine: KeyboardInputEngine {
     mutating func commitCompositionAsText() -> String? {
         if bridge.isAvailable {
             return bridge.commitCompositionAsText()
+        }
+        return nil
+    }
+
+    mutating func commitRawInputAsText() -> String? {
+        if bridge.isAvailable {
+            return bridge.commitRawInputAsText()
         }
         return nil
     }
