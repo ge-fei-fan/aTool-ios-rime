@@ -340,13 +340,34 @@ final class RimeBridge {
     var candidates: [RimeCandidate] {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return [] }
-            return (nativeBridge.currentContext()?.candidates ?? []).map {
+            return (nativeBridge.currentContext()?.candidates ?? [])
+                .filter { !Self.containsUnsupportedSupplementaryCJK($0.text) }
+                .map {
                 RimeCandidate(
                     text: $0.text,
                     comment: $0.comment,
                     index: $0.index,
                     consumeLength: $0.consumeLength
                 )
+            }
+        }
+    }
+
+    private static func containsUnsupportedSupplementaryCJK(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x20000...0x2A6DF,
+                 0x2A700...0x2B73F,
+                 0x2B740...0x2B81F,
+                 0x2B820...0x2CEAF,
+                 0x2CEB0...0x2EBEF,
+                 0x2EBF0...0x2EE5F,
+                 0x2F800...0x2FA1F,
+                 0x30000...0x3134F,
+                 0x31350...0x323AF:
+                return true
+            default:
+                return false
             }
         }
     }

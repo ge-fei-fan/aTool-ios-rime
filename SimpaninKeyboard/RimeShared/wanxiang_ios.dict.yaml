@@ -7,8 +7,10 @@ version: "LTS-iOS"
 sort: by_weight
 use_preset_vocabulary: false
 import_tables:
-  # iOS 键盘扩展内存预算很小，只预加载最核心的字/基础词。
-  # 不引入联想、诗词、地名等大词库，避免启动时加载 70MB+ table 被系统杀掉。
+  # iOS 键盘预加载字表、基础词、联想与错音词库。
+  # 仍不引入诗词、地名等更大词库，控制键盘扩展启动内存压力。
   - dicts/zi
   - dicts/jichu
+  - dicts/lianxiang
+  - dicts/cuoyin
 ...

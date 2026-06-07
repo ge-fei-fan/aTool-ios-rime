@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHARED_DIR="${ROOT_DIR}/SimpaninKeyboard/RimeShared"
 USER_DIR="${TMPDIR:-/tmp}/simpanin-rime-user-prebuild"
-SCHEMA_ID="${SCHEMA_ID:-wanxiang_ios}"
-TABLE_NAME="${TABLE_NAME:-wanxiang_ios}"
+SCHEMA_ID="${SCHEMA_ID:-wanxiang}"
+TABLE_NAME="${TABLE_NAME:-wanxiang}"
 
 info() {
   printf '==> %s\n' "$1"
@@ -53,13 +53,14 @@ build_dir_is_complete() {
 
 update_manifest() {
   info "Updating rime-shared-manifest.json"
-  python3 - "${SHARED_DIR}" <<'PY'
+  python3 - "${SHARED_DIR}" "${SCHEMA_ID}" <<'PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
 dest = Path(sys.argv[1])
+schema_id = sys.argv[2]
 manifest_path = dest / "rime-shared-manifest.json"
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -77,6 +78,7 @@ for path in sorted(dest.rglob("*")):
         "bytes": len(data),
     })
 
+manifest["schemaID"] = schema_id
 manifest["files"] = files
 manifest_path.write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

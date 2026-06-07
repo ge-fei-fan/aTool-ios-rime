@@ -8,29 +8,89 @@
       "sha256": "576776ac8ca67f4493cb617747bb3485edf207759a6f65a61a5c53be7c1ce1f2"
     },
     {
-      "bytes": 1769,
+      "bytes": 1765,
       "path": "build/default.yaml",
-      "sha256": "d40adcd612d5e15ada16397bc31399632a0129d3110c65463618fd80d2638ed8"
+      "sha256": "4f72fdd0a76b9a7d38e6a6d5787170647f21d52b5ba7c67d6fcb3028fafc3b47"
     },
     {
-      "bytes": 176248,
-      "path": "build/wanxiang_ios.prism.bin",
-      "sha256": "cd8ca6d3cdd59169810aba66cc87ea9f4089d7746222113bcd8d8be7f910aca2"
+      "bytes": 184160,
+      "path": "build/wanxiang.prism.bin",
+      "sha256": "5be6a51eb22326a415e706135c44b35c679999926ed7b3f88cb86a9fa2e03759"
     },
     {
       "bytes": 275116,
-      "path": "build/wanxiang_ios.reverse.bin",
-      "sha256": "7a280a1b5ee0bccbc18f27d4dd2402b3bf6c93b8ccc6c6138a628aadebd4bd8f"
+      "path": "build/wanxiang.reverse.bin",
+      "sha256": "edf90a50e69add15041f717f4c58e1c2bf7aff50a342b0bf5978bbe8ed2c16dc"
     },
     {
-      "bytes": 94622,
-      "path": "build/wanxiang_ios.schema.yaml",
-      "sha256": "2e0a4385a95bb8582085936730a4e82e804b9a784c689e37170086abe6551c1d"
+      "bytes": 100472,
+      "path": "build/wanxiang.schema.yaml",
+      "sha256": "d6aab3bda261932215a02aa781e5ad6aececa1308ec268965423c9ada3c9be97"
     },
     {
-      "bytes": 49089048,
-      "path": "build/wanxiang_ios.table.bin",
-      "sha256": "efdd8e74ffe93eaa06cc4a9d4a0150da728276193b64d00f31bfec8c12634434"
+      "bytes": 76932056,
+      "path": "build/wanxiang.table.bin",
+      "sha256": "bcc379a63d4c513b0b74f17bd275bb09c424b4119d3eb46512944604847fac3c"
+    },
+    {
+      "bytes": 11716008,
+      "path": "build/wanxiang_english.prism.bin",
+      "sha256": "df6f8de14be24fc474dd2c71ba50d962cacbf295f1960bd69bd3f64621299130"
+    },
+    {
+      "bytes": 690412,
+      "path": "build/wanxiang_english.reverse.bin",
+      "sha256": "d2d138ff6fbc3fa73af024d9e85ed800b7d12aa83f47294a81e4fa66bb671fb5"
+    },
+    {
+      "bytes": 4409,
+      "path": "build/wanxiang_english.schema.yaml",
+      "sha256": "866c115e1363ba69971a59376a959b6c779903ba07d56f2410ce7717804c35b6"
+    },
+    {
+      "bytes": 1943984,
+      "path": "build/wanxiang_english.table.bin",
+      "sha256": "4fa6566f1f6601180ab19d14497227476801e4dd1b21eabb3a3889f5a00842b4"
+    },
+    {
+      "bytes": 1382384,
+      "path": "build/wanxiang_mixedcode.prism.bin",
+      "sha256": "1048e53fed8e4a10047d9e36aae2ffcd77f82444f51cfa84bd3f9db85f97f04a"
+    },
+    {
+      "bytes": 35028,
+      "path": "build/wanxiang_mixedcode.reverse.bin",
+      "sha256": "e6c5bbd8d7e731e357b6188841a0b40a75db23f3a26d52e96bc70760d309398b"
+    },
+    {
+      "bytes": 4134,
+      "path": "build/wanxiang_mixedcode.schema.yaml",
+      "sha256": "29099093b294c5ffac706e1a74c499f94686bcada9747fc065f949e827a7fdab"
+    },
+    {
+      "bytes": 66668,
+      "path": "build/wanxiang_mixedcode.table.bin",
+      "sha256": "02c1caf67a1c64fee04ce38848f7e8960d56113b08440f8e5ecfb3be77573cb1"
+    },
+    {
+      "bytes": 7007344,
+      "path": "build/wanxiang_reverse.prism.bin",
+      "sha256": "2252b7a7703699b702cf2617d6ac2aadc0448e489c94a16536838bbddd5a6404"
+    },
+    {
+      "bytes": 1776056,
+      "path": "build/wanxiang_reverse.reverse.bin",
+      "sha256": "039b7a17b3debb50cc286a6cb97c867658d85559c78462c4a4d489c1affdbbc4"
+    },
+    {
+      "bytes": 2116,
+      "path": "build/wanxiang_reverse.schema.yaml",
+      "sha256": "fe6b9097559191d19ed16dd02122f8b55b31afa892676976327b800444794ceb"
+    },
+    {
+      "bytes": 5285148,
+      "path": "build/wanxiang_reverse.table.bin",
+      "sha256": "f7e003274e5be613427faf61d3fb340da901dac10dc2254a93f2abd90b64b510"
     },
     {
       "bytes": 1532,
@@ -70,7 +130,7 @@
     {
       "bytes": 6373,
       "path": "default.yaml",
-      "sha256": "53ec79d32b39e31541efe5bd9b0550ceec4e19078ef769f1bd1420d3190f4012"
+      "sha256": "a899942160a6a07b8f364eae6ea99031b737bbad42d6c5cfae2f6e1396eba818"
     },
     {
       "bytes": 35934,
@@ -325,7 +385,7 @@
     {
       "bytes": 34,
       "path": "user.yaml",
-      "sha256": "e9d965274765c75b281148e5a2708f82d9b5c5c44fb2958df87ac0eeeef16a09"
+      "sha256": "4b5d01db2c69e241185457873183664b3b077dd871d4f18f42abc9271f727c44"
     },
     {
       "bytes": 8,
@@ -358,14 +418,14 @@
       "sha256": "be43f3eb47b324ba7563d8461725c5562de1aa4df0e9a33bbff9e9acf06d7815"
     },
     {
-      "bytes": 358,
+      "bytes": 366,
       "path": "wanxiang_ios.dict.yaml",
-      "sha256": "7558d9421fa786c2ec960aac99a2593bf700b2c2329c19a09b75ae3009227faf"
+      "sha256": "1cffb264297de1f93f551449b931f32a547f8f39c7cf749ad7609b669ccafcbb"
     },
     {
-      "bytes": 3670,
+      "bytes": 3809,
       "path": "wanxiang_ios.schema.yaml",
-      "sha256": "a05b59dff93f05c8a62be623d32f8ff52bad533b9bb387d245b60d3330aac4bc"
+      "sha256": "db4ce8efd173155721fe44f748c37664dc1d79eb08e21a328e0fe7719257b871"
     },
     {
       "bytes": 309,
@@ -403,7 +463,7 @@
       "sha256": "4fc52877c57812d925dc89494518a7fbd7ed32e89136e8c7a2b5fe530c1a29c7"
     }
   ],
-  "schemaID": "wanxiang_ios",
+  "schemaID": "wanxiang",
   "sourceCommit": "620fdfd25814d391ffb67f0707e13edd5f3894c6",
   "tag": "v15.12.3"
 }

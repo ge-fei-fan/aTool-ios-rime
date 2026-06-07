@@ -47,7 +47,13 @@ engine:
     - script_translator
     - table_translator@custom_phrase
   filters:
+    - lua_filter@*wanxiang.super_comment_preedit
     - uniquifier
+
+super_comment:
+  candidate_length: 2
+  corrector: true
+  corrector_type: "〔comment〕"
 
 translator:
   dictionary: wanxiang_ios

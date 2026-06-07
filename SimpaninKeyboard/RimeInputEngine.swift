@@ -50,7 +50,6 @@ struct RimeInputEngine: KeyboardInputEngine {
         guard !bridge.isAvailable else { return nil }
         return preparationFailureText
             ?? bridge.diagnosticFailureText
-            ?? "Rime启用失败：数据目录准备失败或尚未初始化"
     }
 
     var rawPinyin: String {

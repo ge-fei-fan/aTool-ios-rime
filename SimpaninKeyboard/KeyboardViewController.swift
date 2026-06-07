@@ -17,6 +17,7 @@ final class KeyboardViewController: KeyboardInputViewController {
     }
 
     override func viewWillSetupKeyboardView() {
+        pinyinState.resetInputContextForKeyboardOpen()
         applyLockedKeyboardCaseDeferred()
         setupKeyboardView { [pinyinState] controller in
             PinyinKeyboardView(
@@ -163,7 +164,6 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     private static let candidateRefreshDelay: TimeInterval = 0.012
-    private static let rimeStartupDelay: TimeInterval = 0.85
     private static let sharedDefaultsSuiteName = "group.com.local.fitnex"
     private static let quickFillItemsDefaultsKey = "quickFill.items"
     private static let rimeSharedManifestName = "rime-shared-manifest.json"
@@ -245,23 +245,10 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
 
         rimeInitializationGeneration += 1
-        let generation = rimeInitializationGeneration
         rimeInitializationWorkItem?.cancel()
-        Self.logInputEngineInfo("rime delayed startup scheduled delay=\(Self.rimeStartupDelay)")
-
-        let workItem = DispatchWorkItem { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self,
-                      self.rimeInitializationGeneration == generation,
-                      !self.engine.isUsingRime,
-                      !self.isRimeInitializationInProgress else {
-                    return
-                }
-                self.reloadRimeInputEngine()
-            }
-        }
-        rimeInitializationWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.rimeStartupDelay, execute: workItem)
+        rimeInitializationWorkItem = nil
+        Self.logInputEngineInfo("rime startup scheduled immediately")
+        reloadRimeInputEngine()
     }
 
     func reloadRimeInputEngine() {
@@ -315,6 +302,19 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
         rimeInitializationWorkItem = workItem
         rimeInitializationQueue.async(execute: workItem)
+    }
+
+    func resetInputContextForKeyboardOpen() {
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        clearPartialSelection()
+        engine.clearComposition()
+        hideCandidatePageIfNeeded()
+        displayText = ""
+        rawPinyinText = ""
+        displayCursorOffset = 0
+        hasComposition = false
+        candidates = []
+        isCandidateRefreshPending = false
     }
 
     private func makeRimeInputEngine() -> any KeyboardInputEngine {
@@ -1372,6 +1372,10 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         case .character(let value) where pinyinState.isQuickFillAddInputVisible:
             handleQuickFillAddCharacter(value)
             applyLockedKeyboardCase()
+        case .character(let value) where shouldDirectlyInsertURLCharacter(value):
+            handleURLDirectCharacter(value)
+        case .character(let value) where directPunctuationText(for: value) != nil:
+            handleDirectPunctuation(value)
         case .character(let value) where shouldRouteCharacterToInputEngine(value):
             pinyinState.insertLetter(value)
             applyLockedKeyboardCase()
@@ -1405,6 +1409,8 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             }
             standardActionHandler.handle(action)
             applyLockedKeyboardCaseDeferred()
+        case .keyboardType(.alphabetic):
+            handleAlphabeticKeyboardTypeSwitch(action)
         default:
             standardActionHandler.handle(action)
             applyLockedKeyboardCase()
@@ -1429,6 +1435,14 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             if pinyinState.isQuickFillAddInputVisible {
                 handleQuickFillAddCharacter(value)
                 applyLockedKeyboardCase()
+                return
+            }
+            if shouldDirectlyInsertURLCharacter(value) {
+                handleURLDirectCharacter(value)
+                return
+            }
+            if directPunctuationText(for: value) != nil {
+                handleDirectPunctuation(value)
                 return
             }
             guard shouldRouteCharacterToInputEngine(value) else {
@@ -1489,6 +1503,12 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             }
             handleStandardAction(gesture, on: action)
             applyLockedKeyboardCaseDeferred()
+        case .keyboardType(.alphabetic):
+            if pinyinState.hasComposition,
+               let text = pinyinState.commitCompositionAsText() {
+                commitText(text)
+            }
+            handleAlphabeticKeyboardTypeSwitch(gesture, on: action)
         default:
             if pinyinState.hasComposition,
                let text = pinyinState.commitCompositionAsText() {
@@ -1583,7 +1603,11 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
     }
 
     private func shouldRouteCharacterToInputEngine(_ value: String) -> Bool {
+        guard !isURLInputType else { return false }
         guard pinyinState.isChineseInputEnabled, value.count == 1 else { return false }
+        if directPunctuationText(for: value) != nil {
+            return false
+        }
         if isPinyinLetter(value) {
             return true
         }
@@ -1594,6 +1618,23 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             return true
         }
         return pinyinState.hasComposition && isRimeCompositionCharacter(value)
+    }
+
+    private var isURLInputType: Bool {
+        controller?.state.keyboardContext.keyboardInputType == .url
+    }
+
+    private func shouldDirectlyInsertURLCharacter(_ value: String) -> Bool {
+        isURLInputType && !pinyinState.isQuickFillAddInputVisible && !value.isEmpty
+    }
+
+    private func handleURLDirectCharacter(_ value: String) {
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitRawInputAsText() {
+            commitText(text)
+        }
+        commitText(value)
+        applyLockedKeyboardCase()
     }
 
     private func isRimeCompositionCharacter(_ value: String) -> Bool {
@@ -1648,8 +1689,13 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             if pinyinState.isQuickFillAddInputVisible {
                 return true
             }
-            return shouldRouteCharacterToInputEngine(value)
+            if shouldDirectlyInsertURLCharacter(value) {
+                return pinyinState.hasComposition
+            }
+            return directPunctuationText(for: value) != nil || shouldRouteCharacterToInputEngine(value)
         case .backspace, .shift, .space, .primary:
+            return true
+        case .keyboardType(.alphabetic):
             return true
         default:
             return false
@@ -1662,13 +1708,18 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             if pinyinState.isQuickFillAddInputVisible {
                 return true
             }
-            return shouldRouteCharacterToInputEngine(value)
+            if shouldDirectlyInsertURLCharacter(value) {
+                return pinyinState.hasComposition
+            }
+            return directPunctuationText(for: value) != nil || shouldRouteCharacterToInputEngine(value)
         case .backspace:
             return true
         case .space:
             return pinyinState.isQuickFillAddInputVisible
         case .primary:
             return pinyinState.hasComposition || pinyinState.isQuickFillAddInputVisible
+        case .keyboardType(.alphabetic):
+            return false
         default:
             return false
         }
@@ -1686,6 +1737,53 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         }
         pinyinState.toggleChineseInput()
         applyLockedKeyboardCase()
+    }
+
+    private func handleDirectPunctuation(_ value: String) {
+        guard let punctuation = directPunctuationText(for: value) else { return }
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitCompositionAsText() {
+            commitText(text)
+        }
+        commitText(punctuation)
+        applyLockedKeyboardCase()
+    }
+
+    private func directPunctuationText(for value: String) -> String? {
+        guard !isURLInputType else { return nil }
+        if value == "'" {
+            return pinyinState.isChineseInputEnabled ? "’" : "'"
+        }
+        return directChinesePunctuationText(for: value)
+    }
+
+    private func directChinesePunctuationText(for value: String) -> String? {
+        guard pinyinState.isChineseInputEnabled else { return nil }
+        switch value {
+        case "-", "/", "“", "”", "’":
+            return value
+        case "'":
+            return "’"
+        case "\"":
+            return "“"
+        default:
+            return nil
+        }
+    }
+
+    private func handleAlphabeticKeyboardTypeSwitch(_ action: KeyboardAction) {
+        applyLockedKeyboardCase()
+        standardActionHandler.handle(action)
+        applyLockedKeyboardCaseDeferred()
+    }
+
+    private func handleAlphabeticKeyboardTypeSwitch(
+        _ gesture: Keyboard.Gesture,
+        on action: KeyboardAction
+    ) {
+        applyLockedKeyboardCase()
+        standardActionHandler.handle(gesture, on: action)
+        applyLockedKeyboardCaseDeferred()
     }
 
     private func commitText(_ text: String) {
@@ -1744,6 +1842,8 @@ private struct PinyinKeyboardView: View {
                     PinyinLanguageSwitchButtonContent(isChineseInputEnabled: pinyinState.isChineseInputEnabled)
                 } else if case .primary = params.item.action, pinyinState.hasComposition || pinyinState.isQuickFillAddInputVisible {
                     PinyinPrimaryConfirmButtonContent(title: pinyinState.isQuickFillAddInputVisible && !pinyinState.hasComposition ? "保存" : "确认")
+                } else if let value = centeredChinesePunctuationText(for: params.item.action) {
+                    PinyinCenteredPunctuationButtonContent(value: value)
                 } else {
                     params.view
                 }
@@ -1798,6 +1898,8 @@ private struct PinyinKeyboardView: View {
     @ViewBuilder
     private var edgeBlankTapOverlay: some View {
         if pinyinState.isChineseInputEnabled
+            && keyboardContext.keyboardType == .alphabetic
+            && keyboardContext.keyboardInputType != .url
             && !pinyinState.isCandidatePageVisible
             && !pinyinState.isQuickFillPanelVisible
             && !pinyinState.isQuickFillAddInputVisible
@@ -1817,15 +1919,42 @@ private struct PinyinKeyboardView: View {
         let utilityKeySide = utilityKeySide(in: layout)
         layout.itemRows = layout.itemRows.map { row in
             row.map { item in
-                resizedUtilityItem(localizedPunctuationItem(item), side: utilityKeySide)
+                resizedUtilityItem(localizedPunctuationItem(lowercasedAlphabeticItem(item)), side: utilityKeySide)
             }
         }
         layout.itemRows.insert(languageSwitchItem(side: utilityKeySide), after: .space)
         return layout
     }
 
+    private func lowercasedAlphabeticItem(_ item: KeyboardLayout.Item) -> KeyboardLayout.Item {
+        guard !pinyinState.isUppercaseLocked,
+              case .character(let value) = item.action,
+              let lowercasedValue = lowercasedASCIICharacter(value) else {
+            return item
+        }
+
+        return KeyboardLayout.Item(
+            action: .character(lowercasedValue),
+            secondaryAction: item.secondaryAction,
+            size: item.size,
+            alignment: item.alignment,
+            edgeInsets: item.edgeInsets
+        )
+    }
+
+    private func lowercasedASCIICharacter(_ value: String) -> String? {
+        guard value.count == 1,
+              let scalar = value.unicodeScalars.first,
+              scalar.value >= 65,
+              scalar.value <= 90 else {
+            return nil
+        }
+        return value.lowercased()
+    }
+
     private func localizedPunctuationItem(_ item: KeyboardLayout.Item) -> KeyboardLayout.Item {
-        guard pinyinState.isChineseInputEnabled,
+        guard keyboardContext.keyboardInputType != .url,
+              pinyinState.isChineseInputEnabled,
               case .character(let value) = item.action,
               let localizedValue = localizedChinesePunctuation(for: value) else {
             return item
@@ -1884,6 +2013,25 @@ private struct PinyinKeyboardView: View {
             return "〉"
         default:
             return nil
+        }
+    }
+
+    private func centeredChinesePunctuationText(for action: KeyboardAction) -> String? {
+        guard keyboardContext.keyboardInputType != .url,
+              pinyinState.isChineseInputEnabled,
+              case .character(let value) = action,
+              isCenteredChinesePunctuation(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private func isCenteredChinesePunctuation(_ value: String) -> Bool {
+        switch value {
+        case "：", "；", "（", "）", "“", "”", "‘", "’", "。", "，", "？", "！", "【", "】", "《", "》", "％", "、", "｜", "～", "〈", "〉":
+            return true
+        default:
+            return false
         }
     }
 
@@ -2060,6 +2208,70 @@ private struct PinyinPrimaryConfirmButtonContent: View {
             .font(.system(size: 16, weight: .semibold))
             .minimumScaleFactor(0.75)
             .lineLimit(1)
+    }
+}
+
+private struct PinyinCenteredPunctuationButtonContent: View {
+    let value: String
+
+    var body: some View {
+        Text(value)
+            .font(.system(size: metrics.fontSize, weight: .regular))
+            .minimumScaleFactor(0.75)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .offset(metrics.offset)
+            .accessibilityLabel(value)
+    }
+
+    private var metrics: PunctuationDisplayMetrics {
+        switch value {
+        case "。":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: -7))
+        case "，":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: -7))
+        case "、":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: -6))
+        case "；":
+            return PunctuationDisplayMetrics(fontSize: 22, offset: CGSize(width: 0, height: -3))
+        case "：":
+            return PunctuationDisplayMetrics(fontSize: 22, offset: CGSize(width: 0, height: -1))
+        case "？", "！":
+            return PunctuationDisplayMetrics(fontSize: 22, offset: CGSize(width: 0, height: -1))
+        case "％":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "｜":
+            return PunctuationDisplayMetrics(fontSize: 22, offset: CGSize(width: 0, height: -0.5))
+        case "～":
+            return PunctuationDisplayMetrics(fontSize: 22, offset: CGSize(width: 0, height: -1.5))
+        case "“":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: 4))
+        case "”":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: 4))
+        case "‘":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: 4))
+        case "’":
+            return PunctuationDisplayMetrics(fontSize: 23, offset: CGSize(width: 0, height: 4))
+        case "（":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "）":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "【":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "】":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "《", "〈":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        case "》", "〉":
+            return PunctuationDisplayMetrics(fontSize: 21, offset: CGSize(width: 0, height: -1))
+        default:
+            return PunctuationDisplayMetrics(fontSize: 22, offset: .zero)
+        }
+    }
+
+    private struct PunctuationDisplayMetrics {
+        let fontSize: CGFloat
+        let offset: CGSize
     }
 }
 
@@ -3517,6 +3729,14 @@ private struct PinyinCandidateButton: View {
         .custom("NotoSansCJKsc-Regular", size: 19)
     }
 
+    private var commentText: String? {
+        guard let comment = candidate.comment?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !comment.isEmpty else {
+            return nil
+        }
+        return comment
+    }
+
     var body: some View {
         Button {
             guard !pinyinState.isCandidateRefreshPending else { return }
@@ -3528,10 +3748,18 @@ private struct PinyinCandidateButton: View {
                 }
             }
         } label: {
-            Text(candidate.text)
-                .font(candidateFont)
-                .fontWeight(index == 0 ? .semibold : .regular)
-                .foregroundStyle(.primary)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(candidate.text)
+                    .font(candidateFont)
+                    .fontWeight(index == 0 ? .semibold : .regular)
+                    .foregroundStyle(.primary)
+
+                if let commentText {
+                    Text(commentText)
+                        .font(.custom("NotoSansCJKsc-Regular", size: expanded ? 14 : 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
                 .lineLimit(1)
                 .truncationMode(.tail)
             .padding(.horizontal, 12)

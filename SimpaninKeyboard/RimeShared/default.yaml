@@ -8,8 +8,8 @@ config_version: 'LTS'
 
 # 方案列表
 schema_list:
-  - schema: wanxiang_ios
-#  - schema: wanxiang
+#  - schema: wanxiang_ios
+  - schema: wanxiang
 #  - schema: wanxiang_english
 #  - schema: wanxiang_t9
 # 菜单

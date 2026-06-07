@@ -11,7 +11,7 @@
 #endif
 
 NSErrorDomain const RimeNativeBridgeErrorDomain = @"com.local.simpanin.rime.native";
-static const char *SimpaninRimeSchemaID = "wanxiang_ios";
+static const char *SimpaninRimeSchemaID = "wanxiang";
 
 static NSError *RimeNativeError(NSInteger code, NSString *message) {
     return [NSError errorWithDomain:RimeNativeBridgeErrorDomain
@@ -176,7 +176,7 @@ static NSError *RimeNativeError(NSInteger code, NSString *message) {
 
     if (_api->select_schema && !_api->select_schema(_sessionID, SimpaninRimeSchemaID)) {
         if (error) {
-            *error = RimeNativeError(8, @"Failed to select schema: wanxiang_ios.");
+            *error = RimeNativeError(8, @"Failed to select schema: wanxiang.");
         }
         _api->destroy_session(_sessionID);
         _sessionID = 0;
