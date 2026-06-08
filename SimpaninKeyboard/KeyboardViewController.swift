@@ -72,6 +72,15 @@ private enum PinyinKeyboardMetrics {
     static let expandedCandidateVerticalPadding: CGFloat = 10
     static let utilityIconPointSize: CGFloat = 24
     static let quickFillPanelAnimationDuration: TimeInterval = 0.22
+    static let bottomRowKeyHeight: CGFloat = 42
+    static let bottomRowHorizontalInset: CGFloat = 3
+    static let bottomRowShadowBottomInset: CGFloat = 4
+}
+
+private enum PinyinBottomRowWidthConfig {
+    // Order: keyboard switch, punctuation/symbol switch, space, Chinese/English, return/confirm.
+    static let alphabeticRatios: [CGFloat] = [1.35, 1.00, 4.10, 1.00, 1.75]
+    static let numericAndSymbolicRatios: [CGFloat] = [1.35, 1.00, 4.10, 1.00, 1.75]
 }
 
 private struct RimeUserDataPreparation {
@@ -157,6 +166,58 @@ private enum RimeDataPreparationError: LocalizedError {
     }
 }
 
+private enum PinyinEmojiCategory: String, CaseIterable, Identifiable {
+    case frequent
+    case faces
+    case hands
+    case animals
+    case food
+    case activity
+    case objects
+    case symbols
+    case currency
+    case flags
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .frequent: return "常用"
+        case .faces: return "表情"
+        case .hands: return "手势"
+        case .animals: return "动物"
+        case .food: return "食物"
+        case .activity: return "活动"
+        case .objects: return "物品"
+        case .symbols: return "符号"
+        case .currency: return "货币"
+        case .flags: return "旗帜"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .frequent: return "clock"
+        case .faces: return "face.smiling"
+        case .hands: return "hand.raised"
+        case .animals: return "pawprint"
+        case .food: return "fork.knife"
+        case .activity: return "gamecontroller"
+        case .objects: return "cube.box"
+        case .symbols: return "number"
+        case .currency: return "dollarsign.circle"
+        case .flags: return "flag"
+        }
+    }
+}
+
+private struct PinyinEmojiSection: Identifiable, Equatable {
+    let category: PinyinEmojiCategory
+    let items: [String]
+
+    var id: PinyinEmojiCategory { category }
+}
+
 private final class PinyinKeyboardInputState: ObservableObject {
     private struct PartialSelectionStep: Equatable {
         let committedText: String
@@ -169,6 +230,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private static let rimeSharedManifestName = "rime-shared-manifest.json"
     private static let installedRimeSharedManifestName = ".simpanin-rime-shared-manifest.json"
     private static let installedRimeDeploymentMarkerName = ".simpanin-rime-deploy-marker.json"
+    private static let emojiDataRelativePath = "RimeShared/lua/data/emoji.txt"
     private static let keyboardDiagnosticLogQueue = DispatchQueue(label: "com.local.simpanin.keyboard.diagnostic-log")
     private static let keyboardDiagnosticLogChunkFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -191,6 +253,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private var candidateRefreshWorkItem: DispatchWorkItem?
     private var candidateRefreshGeneration = 0
     private var appliedCandidateGeneration = 0
+    private var shouldResetCandidateScrollAfterRefresh = false
     private var partialSelectionSteps: [PartialSelectionStep] = []
 
     @Published private(set) var displayText = ""
@@ -212,7 +275,12 @@ private final class PinyinKeyboardInputState: ObservableObject {
     @Published var quickFillItems: [String] = []
     @Published var quickFillDraftText = ""
     @Published var quickFillDraftCursorOffset = 0
+    @Published var isEmojiPanelVisible = false
+    @Published var emojiItems: [String] = []
+    @Published var emojiSections: [PinyinEmojiSection] = []
     @Published var isTranslationPanelVisible = false
+    @Published var isNumericOrSymbolicKeyboardVisible = false
+    @Published var isNineGridNumericKeyboardVisible = false
     @Published var translationText = ""
     @Published var translationStatusText = ""
     private var quickFillEditingOriginalText: String?
@@ -309,6 +377,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         clearPartialSelection()
         engine.clearComposition()
         hideCandidatePageIfNeeded()
+        setNineGridNumericKeyboardVisible(false)
         displayText = ""
         rawPinyinText = ""
         displayCursorOffset = 0
@@ -349,7 +418,9 @@ private final class PinyinKeyboardInputState: ObservableObject {
         isRimeInitializationInProgress = false
         cancelPendingCandidateRefresh(clearCandidates: true)
         hideCandidatePageIfNeeded()
+        setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
+        setNineGridNumericKeyboardVisible(false)
 
         // Do not clear or shutdown the process-wide Rime session while the
         // keyboard extension is disappearing. iOS can call this during input
@@ -698,6 +769,14 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
     }
 
+    private func partialSelectionDisplayText(with remainingRawPinyin: String) -> String {
+        let prefixText = partialSelectionPrefixText
+        guard !prefixText.isEmpty else { return remainingRawPinyin }
+        guard !remainingRawPinyin.isEmpty else { return prefixText }
+        let remainingText = PinyinCompositionFormatter.segmentedDisplayText(from: remainingRawPinyin)
+        return "\(prefixText)'\(remainingText)"
+    }
+
     private func clearPartialSelection() {
         partialSelectionSteps.removeAll()
     }
@@ -779,7 +858,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
                 )
             )
             rebuildComposition(with: splitRawPinyin.remaining)
-            resetCandidateScrollPosition()
+            requestCandidateScrollResetAfterRefresh()
             refreshPublishedComposition()
             scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
             return nil
@@ -843,6 +922,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
 
     func toggleQuickFillPanel() {
         reloadQuickFillItems()
+        setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
         if isQuickFillAddInputVisible {
             returnToQuickFillPanel()
@@ -860,6 +940,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     func setQuickFillPanelVisible(_ visible: Bool) {
         if visible {
             reloadQuickFillItems()
+            setEmojiPanelVisible(false)
             setTranslationPanelVisible(false)
             hideCandidatePageIfNeeded()
         } else {
@@ -873,6 +954,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func showQuickFillAddInput() {
+        setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
         quickFillDraftText = ""
         quickFillDraftCursorOffset = 0
@@ -1004,6 +1086,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func openTranslationPanel(hasFullAccess: Bool) {
+        setEmojiPanelVisible(false)
         isQuickFillPanelVisible = false
         isQuickFillAddInputVisible = false
         quickFillDraftText = ""
@@ -1018,6 +1101,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         guard isTranslationPanelVisible != visible else { return }
         isTranslationPanelVisible = visible
         if visible {
+            isEmojiPanelVisible = false
             isQuickFillPanelVisible = false
             isQuickFillAddInputVisible = false
             hideCandidatePageIfNeeded()
@@ -1126,6 +1210,143 @@ private final class PinyinKeyboardInputState: ObservableObject {
         translationTask?.cancel()
         translationTask = nil
         translationStreamDelegate = nil
+    }
+
+    func toggleEmojiPanel() {
+        reloadEmojiItemsIfNeeded()
+        setEmojiPanelVisible(!isEmojiPanelVisible)
+    }
+
+    func setNumericOrSymbolicKeyboardVisible(_ visible: Bool) {
+        if isNumericOrSymbolicKeyboardVisible != visible {
+            isNumericOrSymbolicKeyboardVisible = visible
+        }
+        if !visible {
+            setNineGridNumericKeyboardVisible(false)
+        }
+    }
+
+    func toggleNineGridNumericKeyboard() {
+        setNineGridNumericKeyboardVisible(!isNineGridNumericKeyboardVisible)
+    }
+
+    func setNineGridNumericKeyboardVisible(_ visible: Bool) {
+        guard isNineGridNumericKeyboardVisible != visible else { return }
+        if visible {
+            isQuickFillPanelVisible = false
+            isQuickFillAddInputVisible = false
+            quickFillDraftText = ""
+            quickFillDraftCursorOffset = 0
+            quickFillEditingOriginalText = nil
+            setEmojiPanelVisible(false)
+            setTranslationPanelVisible(false)
+            hideCandidatePageIfNeeded()
+        }
+        isNineGridNumericKeyboardVisible = visible
+    }
+
+    func setEmojiPanelVisible(_ visible: Bool) {
+        if visible {
+            reloadEmojiItemsIfNeeded()
+            isQuickFillPanelVisible = false
+            isQuickFillAddInputVisible = false
+            quickFillDraftText = ""
+            quickFillDraftCursorOffset = 0
+            quickFillEditingOriginalText = nil
+            setTranslationPanelVisible(false)
+            hideCandidatePageIfNeeded()
+        }
+        if isEmojiPanelVisible != visible {
+            isEmojiPanelVisible = visible
+        }
+    }
+
+    private func reloadEmojiItemsIfNeeded() {
+        guard emojiSections.isEmpty else { return }
+        let loadedSections = Self.loadEmojiSectionsFromBundle()
+        emojiSections = loadedSections
+        emojiItems = loadedSections
+            .filter { $0.category != .frequent }
+            .flatMap(\.items)
+    }
+
+    private static func loadEmojiSectionsFromBundle() -> [PinyinEmojiSection] {
+        let bundle = Bundle(for: KeyboardViewController.self)
+        let fileURL: URL?
+        if let directURL = bundle.url(forResource: emojiDataRelativePath, withExtension: nil) {
+            fileURL = directURL
+        } else {
+            fileURL = bundle.url(forResource: "emoji", withExtension: "txt", subdirectory: "RimeShared/lua/data")
+        }
+
+        guard let fileURL,
+              let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            return []
+        }
+
+        var seen = Set<String>()
+        var itemsByCategory: [PinyinEmojiCategory: [String]] = [:]
+        var frequentItems: [String] = []
+        for line in content.split(whereSeparator: \.isNewline) {
+            let columns = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+            guard columns.count == 2 else { continue }
+            let keyword = String(columns[0])
+            for rawItem in columns[1].split(separator: "|", omittingEmptySubsequences: true) {
+                let item = rawItem.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !item.isEmpty, !seen.contains(item) else { continue }
+                seen.insert(item)
+                if frequentItems.count < 84 {
+                    frequentItems.append(item)
+                }
+                let category = emojiCategory(keyword: keyword, item: item)
+                itemsByCategory[category, default: []].append(item)
+            }
+        }
+        itemsByCategory[.frequent] = frequentItems
+        return PinyinEmojiCategory.allCases.compactMap { category in
+            guard let items = itemsByCategory[category], !items.isEmpty else { return nil }
+            return PinyinEmojiSection(category: category, items: items)
+        }
+    }
+
+    private static func emojiCategory(keyword: String, item: String) -> PinyinEmojiCategory {
+        if isFlagEmoji(keyword: keyword, item: item) { return .flags }
+        if isCurrencyEmoji(keyword: keyword, item: item) { return .currency }
+        if keywordContains(keyword, ["手", "掌", "指", "拳", "拇指", "握", "拍手", "合十"]) || hasScalar(in: item, ranges: [0x1F44A...0x1F450, 0x1F590...0x1F596, 0x1F64F...0x1F64F, 0x1F91A...0x1F91F, 0x1FAF0...0x1FAFF]) { return .hands }
+        if keywordContains(keyword, ["笑", "脸", "哭", "表情", "嘴", "眼", "吐舌", "眨眼", "生气", "惊讶"]) || hasScalar(in: item, ranges: [0x1F600...0x1F64F, 0x1F970...0x1F97F]) { return .faces }
+        if keywordContains(keyword, ["猫", "狗", "鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "猪", "鸟", "鱼", "动物"]) || hasScalar(in: item, ranges: [0x1F400...0x1F43F, 0x1F980...0x1F9AE]) { return .animals }
+        if keywordContains(keyword, ["饭", "面", "食", "餐", "咖啡", "酒", "茶", "水果", "蛋糕", "糖", "披萨"]) || hasScalar(in: item, ranges: [0x1F32D...0x1F37F, 0x1F950...0x1F96F, 0x1F9C0...0x1F9FF]) { return .food }
+        if keywordContains(keyword, ["球", "游戏", "运动", "比赛", "奖", "牌", "靶", "节日", "烟花"]) || hasScalar(in: item, ranges: [0x1F3A0...0x1F3FF]) { return .activity }
+        if keywordContains(keyword, ["电话", "电脑", "键盘", "表", "钟", "工具", "剑", "锚", "齿轮", "医疗", "按钮", "相机", "书", "笔"]) || hasScalar(in: item, ranges: [0x1F4A0...0x1F5FF]) { return .objects }
+        return .symbols
+    }
+
+    private static func isFlagEmoji(keyword: String, item: String) -> Bool {
+        keywordContains(keyword, ["旗", "国旗", "红旗", "白旗", "黑旗", "彩虹旗", "海盗旗"])
+            || hasScalar(in: item, ranges: [0x1F1E6...0x1F1FF])
+            || item.contains("🏳")
+            || item.contains("🏴")
+            || item.contains("🎌")
+            || item.contains("🎏")
+            || item.contains("🏁")
+    }
+
+    private static func isCurrencyEmoji(keyword: String, item: String) -> Bool {
+        if keywordContains(keyword, ["美元", "美刀", "港元", "港币", "澳门元", "澳门币", "葡币", "新加坡元", "新加坡币", "英镑", "欧元", "卢比", "人民币", "比特币", "泰铢", "货币", "钱", "币"]) {
+            return true
+        }
+        let currencyItems: Set<String> = ["$", "HK$", "MOP$", "S$", "£", "€", "￥", "¥", "₨", "₹", "₿", "฿", "💵", "💲", "💷", "💶", "💴", "💰", "🪙"]
+        return currencyItems.contains(item)
+    }
+
+    private static func keywordContains(_ keyword: String, _ values: [String]) -> Bool {
+        values.contains { keyword.localizedCaseInsensitiveContains($0) }
+    }
+
+    private static func hasScalar(in item: String, ranges: [ClosedRange<UInt32>]) -> Bool {
+        item.unicodeScalars.contains { scalar in
+            ranges.contains { $0.contains(scalar.value) }
+        }
     }
 
     private func persistQuickFillItems(_ items: [String]) {
@@ -1252,6 +1473,10 @@ private final class PinyinKeyboardInputState: ObservableObject {
         if candidates != refreshedCandidates {
             candidates = refreshedCandidates
         }
+        if shouldResetCandidateScrollAfterRefresh {
+            shouldResetCandidateScrollAfterRefresh = false
+            resetCandidateScrollPosition()
+        }
         if refreshedCandidates.isEmpty {
             hideCandidatePageIfNeeded()
         }
@@ -1275,9 +1500,14 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
 
         let partialRawPinyinPrefixText = partialSelectionRawPinyinPrefixText
-        let nextRawPinyinText = engine.hasComposition || !partialRawPinyinPrefixText.isEmpty
-            ? partialRawPinyinPrefixText + engine.rawPinyin
-            : ""
+        let nextRawPinyinText: String
+        if !partialPrefixText.isEmpty {
+            nextRawPinyinText = partialSelectionDisplayText(with: engine.rawPinyin)
+        } else if engine.hasComposition || !partialRawPinyinPrefixText.isEmpty {
+            nextRawPinyinText = partialRawPinyinPrefixText + engine.rawPinyin
+        } else {
+            nextRawPinyinText = ""
+        }
         if rawPinyinText != nextRawPinyinText {
             rawPinyinText = nextRawPinyinText
         }
@@ -1333,10 +1563,16 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private func resetCandidateScrollPosition() {
         candidateScrollResetToken += 1
     }
+
+    private func requestCandidateScrollResetAfterRefresh() {
+        shouldResetCandidateScrollAfterRefresh = true
+    }
 }
 
 private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
     private static let languageSwitchActionName = "simpanin.inputMode.toggleChineseEnglish"
+    private static let smartPunctuationActionName = "simpanin.punctuation.smartCommaPeriod"
+    private static let numericSymbolicPlaceholderActionName = "simpanin.keyboard.bottomRowPlaceholder1234"
     private static let spaceCursorHorizontalPointsPerCharacter: CGFloat = 4.0
     private static let spaceCursorVerticalPointsPerCharacter: CGFloat = 20
 
@@ -1365,8 +1601,12 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
 
     func handle(_ action: KeyboardAction) {
         switch action {
+        case .custom(named: Self.numericSymbolicPlaceholderActionName):
+            handleNineGridNumericKeyboardToggle()
         case .custom(named: Self.languageSwitchActionName):
             handleLanguageSwitch()
+        case .custom(named: Self.smartPunctuationActionName):
+            handleSmartPunctuation()
         case .shift(let keyboardCase):
             handleShift(keyboardCase)
         case .character(let value) where pinyinState.isQuickFillAddInputVisible:
@@ -1427,8 +1667,12 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         }
 
         switch action {
+        case .custom(named: Self.numericSymbolicPlaceholderActionName):
+            handleNineGridNumericKeyboardToggle()
         case .custom(named: Self.languageSwitchActionName):
             handleLanguageSwitch()
+        case .custom(named: Self.smartPunctuationActionName):
+            handleSmartPunctuation()
         case .shift(let keyboardCase):
             handleShift(keyboardCase)
         case .character(let value):
@@ -1527,6 +1771,9 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         from startLocation: CGPoint,
         to currentLocation: CGPoint
     ) {
+        if case .custom(named: Self.numericSymbolicPlaceholderActionName) = action {
+            return
+        }
         if isSpaceAction(action) {
             guard !pinyinState.isQuickFillAddInputVisible else {
                 resetSpaceCursorDrag()
@@ -1683,7 +1930,9 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
 
     private func shouldHandlePinyinAction(_ action: KeyboardAction) -> Bool {
         switch action {
-        case .custom(named: Self.languageSwitchActionName):
+        case .custom(named: Self.languageSwitchActionName),
+             .custom(named: Self.smartPunctuationActionName),
+             .custom(named: Self.numericSymbolicPlaceholderActionName):
             return true
         case .character(let value):
             if pinyinState.isQuickFillAddInputVisible {
@@ -1704,6 +1953,9 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
 
     private func shouldConsumePreReleaseGesture(on action: KeyboardAction) -> Bool {
         switch action {
+        case .custom(named: Self.smartPunctuationActionName),
+             .custom(named: Self.numericSymbolicPlaceholderActionName):
+            return true
         case .character(let value):
             if pinyinState.isQuickFillAddInputVisible {
                 return true
@@ -1736,6 +1988,33 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             commitText(text)
         }
         pinyinState.toggleChineseInput()
+        applyLockedKeyboardCase()
+    }
+
+    private func handleNineGridNumericKeyboardToggle() {
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitCompositionAsText() {
+            commitText(text)
+        }
+        pinyinState.toggleNineGridNumericKeyboard()
+        applyLockedKeyboardCase()
+    }
+
+    private func handleSmartPunctuation() {
+        guard !pinyinState.isNumericOrSymbolicKeyboardVisible else {
+            applyLockedKeyboardCase()
+            return
+        }
+        if pinyinState.isChineseInputEnabled {
+            if pinyinState.hasComposition,
+               let first = pinyinState.firstFreshCompositionCandidateForCommit(),
+               let text = pinyinState.select(first) {
+                commitText(text)
+            }
+            commitText("，")
+        } else {
+            commitText(".")
+        }
         applyLockedKeyboardCase()
     }
 
@@ -1823,6 +2102,8 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
 
 private struct PinyinKeyboardView: View {
     private static let languageSwitchActionName = "simpanin.inputMode.toggleChineseEnglish"
+    private static let smartPunctuationActionName = "simpanin.punctuation.smartCommaPeriod"
+    private static let numericSymbolicPlaceholderActionName = "simpanin.keyboard.bottomRowPlaceholder1234"
 
     @ObservedObject var keyboardContext: KeyboardContext
     let services: Keyboard.Services
@@ -1840,6 +2121,10 @@ private struct PinyinKeyboardView: View {
                     PinyinShiftButtonContent(keyboardCase: keyboardCase)
                 } else if case .custom(named: Self.languageSwitchActionName) = params.item.action {
                     PinyinLanguageSwitchButtonContent(isChineseInputEnabled: pinyinState.isChineseInputEnabled)
+                } else if case .custom(named: Self.smartPunctuationActionName) = params.item.action {
+                    PinyinSmartPunctuationButtonContent(value: smartPunctuationText)
+                } else if case .custom(named: Self.numericSymbolicPlaceholderActionName) = params.item.action {
+                    PinyinNumericSymbolicPlaceholderButtonContent()
                 } else if case .primary = params.item.action, pinyinState.hasComposition || pinyinState.isQuickFillAddInputVisible {
                     PinyinPrimaryConfirmButtonContent(title: pinyinState.isQuickFillAddInputVisible && !pinyinState.hasComposition ? "保存" : "确认")
                 } else if let value = centeredChinesePunctuationText(for: params.item.action) {
@@ -1861,6 +2146,9 @@ private struct PinyinKeyboardView: View {
                     },
                     openTranslationPanel: {
                         pinyinState.openTranslationPanel(hasFullAccess: hasFullAccess)
+                    },
+                    openEmojiPanel: {
+                        pinyinState.toggleEmojiPanel()
                     }
                 )
             }
@@ -1874,16 +2162,48 @@ private struct PinyinKeyboardView: View {
         .overlay(alignment: .top) {
             translationOverlay
         }
+        .overlay(alignment: .top) {
+            emojiOverlay
+        }
         .overlay(alignment: .topLeading) {
             edgeBlankTapOverlay
+        }
+        .overlay {
+            nineGridNumericKeyboardOverlay
         }
         .overlay {
             spaceTrackpadOverlay
         }
         .onAppear {
+            pinyinState.setNumericOrSymbolicKeyboardVisible(isNumericOrSymbolicKeyboard)
             pinyinState.scheduleDelayedRimeInputEngineReload()
         }
-        .clipped()
+        .onChange(of: isNumericOrSymbolicKeyboard) { isNumericOrSymbolicKeyboard in
+            pinyinState.setNumericOrSymbolicKeyboardVisible(isNumericOrSymbolicKeyboard)
+        }
+    }
+
+    @ViewBuilder
+    private var nineGridNumericKeyboardOverlay: some View {
+        if pinyinState.isNineGridNumericKeyboardVisible && isNumericOrSymbolicKeyboard {
+            PinyinNineGridNumericKeyboard(
+                insertText: insertText,
+                deleteBackward: {
+                    pinyinState.setNineGridNumericKeyboardVisible(true)
+                    services.actionHandler.handle(.backspace)
+                },
+                switchToAlphabetic: {
+                    pinyinState.setNineGridNumericKeyboardVisible(false)
+                    services.actionHandler.handle(.keyboardType(.alphabetic))
+                },
+                closeNineGrid: {
+                    pinyinState.setNineGridNumericKeyboardVisible(false)
+                }
+            )
+            .padding(.top, currentToolbarHeight)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isNineGridNumericKeyboardVisible)
+        }
     }
 
     @ViewBuilder
@@ -1904,6 +2224,7 @@ private struct PinyinKeyboardView: View {
             && !pinyinState.isQuickFillPanelVisible
             && !pinyinState.isQuickFillAddInputVisible
             && !pinyinState.isTranslationPanelVisible
+            && !pinyinState.isEmojiPanelVisible
             && !pinyinState.isSpaceTrackpadActive {
             PinyinKeyboardEdgeBlankTapOverlay(
                 topInset: currentToolbarHeight,
@@ -1916,14 +2237,35 @@ private struct PinyinKeyboardView: View {
 
     private var keyboardLayout: KeyboardLayout {
         var layout = KeyboardLayout.standard(for: keyboardContext)
-        let utilityKeySide = utilityKeySide(in: layout)
         layout.itemRows = layout.itemRows.map { row in
             row.map { item in
-                resizedUtilityItem(localizedPunctuationItem(lowercasedAlphabeticItem(item)), side: utilityKeySide)
+                localizedPunctuationItem(lowercasedAlphabeticItem(item))
             }
         }
-        layout.itemRows.insert(languageSwitchItem(side: utilityKeySide), after: .space)
-        return layout
+
+        switch keyboardContext.keyboardType {
+        case .alphabetic:
+            return alphabeticKeyboardLayout(layout)
+        case .numeric:
+            return numericOrSymbolicKeyboardLayout(layout)
+        case .symbolic:
+            return numericOrSymbolicKeyboardLayout(layout)
+        default:
+            return layout
+        }
+    }
+
+    private var smartPunctuationText: String {
+        pinyinState.isChineseInputEnabled ? "，" : "."
+    }
+
+    private var isNumericOrSymbolicKeyboard: Bool {
+        switch keyboardContext.keyboardType {
+        case .numeric, .symbolic:
+            return true
+        default:
+            return false
+        }
     }
 
     private func lowercasedAlphabeticItem(_ item: KeyboardLayout.Item) -> KeyboardLayout.Item {
@@ -2035,25 +2377,6 @@ private struct PinyinKeyboardView: View {
         }
     }
 
-    private func utilityKeySide(in layout: KeyboardLayout) -> CGFloat {
-        for row in layout.itemRows {
-            for item in row {
-                if isPrimaryAction(item.action) {
-                    return item.size.height
-                }
-            }
-        }
-        return CGFloat(layout.idealItemHeight)
-    }
-
-    private func resizedUtilityItem(
-        _ item: KeyboardLayout.Item,
-        side: CGFloat
-    ) -> KeyboardLayout.Item {
-        guard isKeyboardTypeSwitchAction(item.action) else { return item }
-        return item.withWidth(.points(side + 20))
-    }
-
     private func isPrimaryAction(_ action: KeyboardAction) -> Bool {
         if case .primary = action {
             return true
@@ -2061,20 +2384,116 @@ private struct PinyinKeyboardView: View {
         return false
     }
 
-    private func isKeyboardTypeSwitchAction(_ action: KeyboardAction) -> Bool {
-        switch action {
-        case .keyboardType(.numeric), .keyboardType(.alphabetic):
+    private func alphabeticKeyboardLayout(_ layout: KeyboardLayout) -> KeyboardLayout {
+        var layout = layout
+        guard let bottomRowIndex = bottomRowIndex(in: layout),
+              let numericItem = keyboardTypeSwitchItem(in: layout.itemRows[bottomRowIndex], for: .numeric),
+              let spaceItem = layout.itemRows[bottomRowIndex].first(where: { isSpaceAction($0.action) }),
+              let primaryItem = layout.itemRows[bottomRowIndex].first(where: { isPrimaryAction($0.action) }) else {
+            return layout
+        }
+
+        let widths = bottomRowWidths(from: PinyinBottomRowWidthConfig.alphabeticRatios)
+        layout.itemRows[bottomRowIndex] = [
+            bottomRowItem(numericItem, width: widths[0]),
+            bottomRowItem(action: .custom(named: Self.smartPunctuationActionName), width: widths[1]),
+            bottomRowItem(spaceItem, width: widths[2]),
+            bottomRowItem(action: .custom(named: Self.languageSwitchActionName), width: widths[3]),
+            bottomRowItem(primaryItem, width: widths[4])
+        ]
+        return layout
+    }
+
+    private func numericOrSymbolicKeyboardLayout(_ layout: KeyboardLayout) -> KeyboardLayout {
+        var layout = layout
+        guard let bottomRowIndex = bottomRowIndex(in: layout),
+              let spaceItem = layout.itemRows[bottomRowIndex].first(where: { isSpaceAction($0.action) }),
+              let primaryItem = layout.itemRows[bottomRowIndex].first(where: { isPrimaryAction($0.action) }) else {
+            return layout
+        }
+
+        let row = layout.itemRows[bottomRowIndex]
+        let widths = bottomRowWidths(from: PinyinBottomRowWidthConfig.numericAndSymbolicRatios)
+        let alphabeticItem = keyboardTypeSwitchItem(in: row, for: .alphabetic)
+            ?? bottomRowItem(action: .keyboardType(.alphabetic), width: widths[0])
+
+        layout.itemRows[bottomRowIndex] = [
+            bottomRowItem(alphabeticItem, width: widths[0]),
+            bottomRowItem(action: .custom(named: Self.numericSymbolicPlaceholderActionName), width: widths[1]),
+            bottomRowItem(spaceItem, width: widths[2]),
+            bottomRowItem(action: .custom(named: Self.languageSwitchActionName), width: widths[3]),
+            bottomRowItem(primaryItem, width: widths[4])
+        ]
+        return layout
+    }
+
+    private func isSpaceAction(_ action: KeyboardAction) -> Bool {
+        if case .space = action {
             return true
-        default:
+        }
+        return false
+    }
+
+    private func bottomRowIndex(in layout: KeyboardLayout) -> Int? {
+        layout.itemRows.lastIndex { row in
+            row.contains(where: { isSpaceAction($0.action) })
+                && row.contains(where: { isPrimaryAction($0.action) })
+        }
+    }
+
+    private func keyboardTypeSwitchItem(
+        in row: KeyboardLayout.ItemRow,
+        for keyboardType: Keyboard.KeyboardType
+    ) -> KeyboardLayout.Item? {
+        row.first { item in
+            if case .keyboardType(let itemKeyboardType) = item.action {
+                return itemKeyboardType == keyboardType
+            }
             return false
         }
     }
 
-    private func languageSwitchItem(side: CGFloat) -> KeyboardLayout.Item {
-        let adjustedSide = max(0, side - 10)
-        return KeyboardLayout.Item(
-            action: .custom(named: Self.languageSwitchActionName),
-            size: .init(width: .points(adjustedSide), height: adjustedSide)
+    private func bottomRowWidths(from ratios: [CGFloat]) -> [KeyboardLayout.ItemWidth] {
+        let values = Array(ratios.prefix(5)).map { max($0, 0) }
+        guard values.count == 5 else {
+            return Array(repeating: .percentage(0.2), count: 5)
+        }
+
+        let total = values.reduce(0, +)
+        guard total > 0 else {
+            return Array(repeating: .percentage(0.2), count: 5)
+        }
+
+        return values.map { .percentage($0 / total) }
+    }
+
+    private func bottomRowItem(
+        _ item: KeyboardLayout.Item,
+        width: KeyboardLayout.ItemWidth
+    ) -> KeyboardLayout.Item {
+        bottomRowItem(
+            action: item.action,
+            secondaryAction: item.secondaryAction,
+            width: width
+        )
+    }
+
+    private func bottomRowItem(
+        action: KeyboardAction,
+        secondaryAction: KeyboardAction? = nil,
+        width: KeyboardLayout.ItemWidth
+    ) -> KeyboardLayout.Item {
+        KeyboardLayout.Item(
+            action: action,
+            secondaryAction: secondaryAction,
+            size: .init(width: width, height: PinyinKeyboardMetrics.bottomRowKeyHeight),
+            alignment: .center,
+            edgeInsets: .init(
+                top: 0,
+                leading: PinyinKeyboardMetrics.bottomRowHorizontalInset,
+                bottom: PinyinKeyboardMetrics.bottomRowShadowBottomInset,
+                trailing: PinyinKeyboardMetrics.bottomRowHorizontalInset
+            )
         )
     }
 
@@ -2108,6 +2527,18 @@ private struct PinyinKeyboardView: View {
                 .padding(.top, PinyinKeyboardMetrics.candidateToolbarHeight)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isTranslationPanelVisible)
+        }
+    }
+
+    @ViewBuilder
+    private var emojiOverlay: some View {
+        if pinyinState.isEmojiPanelVisible {
+            PinyinEmojiPanel(
+                pinyinState: pinyinState,
+                insertText: insertText
+            )
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isEmojiPanelVisible)
         }
     }
 
@@ -2177,18 +2608,6 @@ private struct PinyinKeyboardEdgeBlankTapOverlay: View {
     }
 }
 
-private extension KeyboardLayout.Item {
-    func withWidth(_ width: KeyboardLayout.ItemWidth) -> KeyboardLayout.Item {
-        KeyboardLayout.Item(
-            action: action,
-            secondaryAction: secondaryAction,
-            size: .init(width: width, height: size.height),
-            alignment: alignment,
-            edgeInsets: edgeInsets
-        )
-    }
-}
-
 private struct PinyinLanguageSwitchButtonContent: View {
     let isChineseInputEnabled: Bool
 
@@ -2208,6 +2627,338 @@ private struct PinyinPrimaryConfirmButtonContent: View {
             .font(.system(size: 16, weight: .semibold))
             .minimumScaleFactor(0.75)
             .lineLimit(1)
+    }
+}
+
+private struct PinyinSmartPunctuationButtonContent: View {
+    let value: String
+
+    var body: some View {
+        Text(value)
+            .font(.system(size: value == "，" ? 24 : 22, weight: .medium))
+            .minimumScaleFactor(0.75)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .offset(x: value == "，" ? 6 : 0, y: value == "，" ? -6 : 0)
+            .accessibilityLabel(value)
+    }
+}
+
+private struct PinyinNumericSymbolicPlaceholderButtonContent: View {
+    var body: some View {
+        VStack(alignment: .center, spacing: -1) {
+            Text("12")
+                .frame(width: 20, height: 13, alignment: .center)
+            Text("34")
+                .frame(width: 20, height: 13, alignment: .center)
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .monospacedDigit()
+        .minimumScaleFactor(0.8)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .accessibilityLabel("12 34")
+    }
+}
+
+private struct PinyinNineGridNumericKeyboard: View {
+    let insertText: (String) -> Void
+    let deleteBackward: () -> Void
+    let switchToAlphabetic: () -> Void
+    let closeNineGrid: () -> Void
+
+    private let numberSymbolKeys: [PinyinNumberSymbolKey] = [
+        .init(value: "+"),
+        .init(value: "-", title: "−"),
+        .init(value: "*", title: "×"),
+        .init(value: "/", title: "÷"),
+        .init(value: "%"),
+        .init(value: "‰"),
+        .init(value: "="),
+        .init(value: "≠"),
+        .init(value: "≈"),
+        .init(value: "<"),
+        .init(value: ">"),
+        .init(value: "≤"),
+        .init(value: "≥"),
+        .init(value: "±"),
+        .init(value: "∞"),
+        .init(value: "√"),
+        .init(value: "π"),
+        .init(value: "°"),
+        .init(value: "℃"),
+        .init(value: "¥"),
+        .init(value: "$"),
+        .init(value: "€")
+    ]
+
+    private let numberRows: [[PinyinNineGridKey]] = [
+        [.text("1"), .text("2"), .text("3")],
+        [.text("4"), .text("5"), .text("6")],
+        [.text("7"), .text("8"), .text("9")],
+        [.control(id: "abc", title: "ABC"), .text("0"), .text(".")]
+    ]
+
+    private let functionKeys: [PinyinNineGridKey] = [
+        .backspace,
+        .control(id: "space", title: "空格"),
+        .text("@"),
+        .control(id: "send", title: "发送")
+    ]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let horizontalPadding: CGFloat = 12
+            let columnSpacing: CGFloat = 7
+            let availableWidth = max(0, proxy.size.width - horizontalPadding - columnSpacing * 2)
+            let sideColumnWidth = max(48, min(62, availableWidth * 0.18))
+            let centerColumnWidth = max(0, availableWidth - sideColumnWidth * 2)
+
+            HStack(spacing: 7) {
+                leftSymbolColumn(availableHeight: proxy.size.height - 10)
+                    .frame(width: sideColumnWidth)
+
+                VStack(spacing: 7) {
+                    ForEach(Array(numberRows.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 7) {
+                            ForEach(row) { key in
+                                keyButton(key)
+                            }
+                        }
+                    }
+                }
+                .frame(width: centerColumnWidth)
+
+                keyColumn(functionKeys)
+                    .frame(width: sideColumnWidth)
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .background(Color(UIColor.systemGray4))
+        }
+    }
+
+    private func leftSymbolColumn(availableHeight: CGFloat) -> some View {
+        let keySpacing: CGFloat = 7
+        let bottomKeyHeight = max(36, (availableHeight - keySpacing * 3) / 4)
+        let symbolColumnHeight = max(0, availableHeight - bottomKeyHeight - keySpacing)
+
+        return VStack(spacing: keySpacing) {
+            PinyinNumberSymbolScrollColumn(symbols: numberSymbolKeys, insertText: insertText)
+                .frame(height: symbolColumnHeight)
+
+            keyButton(.control(id: "back", title: "返回"))
+                .frame(height: bottomKeyHeight)
+        }
+    }
+
+    private func keyColumn(_ keys: [PinyinNineGridKey]) -> some View {
+        VStack(spacing: 7) {
+            ForEach(keys) { key in
+                keyButton(key)
+            }
+        }
+    }
+
+    private func keyButton(_ key: PinyinNineGridKey) -> some View {
+        Button {
+            switch key {
+            case .text(let value, _):
+                insertText(value)
+            case .backspace:
+                deleteBackward()
+            case .returnKey:
+                insertText("\n")
+            case .control(let id, _):
+                switch id {
+                case "abc": switchToAlphabetic()
+                case "close": closeNineGrid()
+                case "back": closeNineGrid()
+                case "space": insertText(" ")
+                case "send": insertText("\n")
+                default: break
+                }
+            }
+        } label: {
+            keyLabel(for: key)
+        }
+        .buttonStyle(PinyinNineGridKeyButtonStyle(role: buttonRole(for: key)))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func buttonRole(for key: PinyinNineGridKey) -> PinyinNineGridKeyButtonStyle.Role {
+        switch key {
+        case .text:
+            return .input
+        case .backspace, .returnKey, .control:
+            return .function
+        }
+    }
+
+    private func keyLabel(for key: PinyinNineGridKey) -> some View {
+        Group {
+            switch key {
+            case .text(let value, let title):
+                Text(title ?? value)
+                    .font(.system(size: 24, weight: .medium))
+                    .monospacedDigit()
+            case .backspace:
+                Image(systemName: "delete.left")
+                    .font(.system(size: 20, weight: .semibold))
+            case .returnKey:
+                Image(systemName: "return")
+                    .font(.system(size: 20, weight: .semibold))
+            case .control(_, let title):
+                Text(title)
+                    .font(.system(size: title.contains("\n") ? 13 : 15, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .monospacedDigit()
+            }
+        }
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
+    enum Role {
+        case input
+        case function
+        case symbolOption
+    }
+
+    let role: Role
+
+    private var cornerRadius: CGFloat {
+        switch role {
+        case .symbolOption:
+            return 0
+        case .input, .function:
+            return 7
+        }
+    }
+
+    private var normalBackground: Color {
+        switch role {
+        case .input, .symbolOption:
+            return Color(.systemBackground)
+        case .function:
+            return Color(UIColor.systemGray5.withAlphaComponent(0.96))
+        }
+    }
+
+    private var pressedBackground: Color {
+        switch role {
+        case .input, .symbolOption:
+            return Color(UIColor.systemGray3)
+        case .function:
+            return Color(UIColor.systemGray2)
+        }
+    }
+
+    private var shadowOpacity: Double {
+        role == .symbolOption ? 0 : 0.20
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed ? pressedBackground : normalBackground,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(role == .symbolOption ? 0 : 0.045), lineWidth: 0.5)
+            }
+            .shadow(
+                color: Color.black.opacity(configuration.isPressed ? 0.02 : shadowOpacity),
+                radius: 0,
+                x: 0,
+                y: configuration.isPressed ? 0 : 1.2
+            )
+            .offset(y: configuration.isPressed ? 1.8 : 0)
+            .scaleEffect(configuration.isPressed ? 0.965 : 1)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+private struct PinyinNumberSymbolScrollColumn: View {
+    let symbols: [PinyinNumberSymbolKey]
+    let insertText: (String) -> Void
+
+    private let visibleItemCount: CGFloat = 4
+    private let dividerHeight: CGFloat = 1 / UIScreen.main.scale
+
+    var body: some View {
+        GeometryReader { proxy in
+            let visibleDividerCount = max(0, visibleItemCount - 1)
+            let itemHeight = max(36, (proxy.size.height - dividerHeight * visibleDividerCount) / visibleItemCount)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(Array(symbols.enumerated()), id: \.element.id) { index, symbol in
+                        Button {
+                            insertText(symbol.value)
+                        } label: {
+                            Text(symbol.title)
+                                .font(.system(size: 23, weight: .medium))
+                                .monospacedDigit()
+                                .minimumScaleFactor(0.75)
+                                .lineLimit(1)
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, minHeight: itemHeight, maxHeight: itemHeight)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PinyinNineGridKeyButtonStyle(role: .symbolOption))
+
+                        if index < symbols.count - 1 {
+                            Divider()
+                                .overlay(Color.primary.opacity(0.045))
+                                .padding(.horizontal, 8)
+                        }
+                    }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(0.045), lineWidth: 0.5)
+            }
+            .shadow(color: Color.black.opacity(0.16), radius: 0, x: 0, y: 1.2)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+}
+
+private struct PinyinNumberSymbolKey: Identifiable, Equatable {
+    let value: String
+    let title: String
+
+    init(value: String, title: String? = nil) {
+        self.value = value
+        self.title = title ?? value
+    }
+
+    var id: String { "number-symbol-\(value)-\(title)" }
+}
+
+private enum PinyinNineGridKey: Identifiable, Equatable {
+    case text(String, title: String? = nil)
+    case backspace
+    case returnKey
+    case control(id: String, title: String)
+
+    var id: String {
+        switch self {
+        case .text(let value, let title): return "text-\(value)-\(title ?? value)"
+        case .backspace: return "backspace"
+        case .returnKey: return "return"
+        case .control(let id, _): return "control-\(id)"
+        }
     }
 }
 
@@ -2334,6 +3085,7 @@ private struct PinyinCandidateToolbar: View {
     let dismissKeyboard: () -> Void
     let openQuickFillPanel: () -> Void
     let openTranslationPanel: () -> Void
+    let openEmojiPanel: () -> Void
 
     private let candidateBatchSize = 30
     private let candidateStripLeadingAnchorID = "pinyin-candidate-strip-leading-anchor"
@@ -2373,7 +3125,7 @@ private struct PinyinCandidateToolbar: View {
             compositionBar
             migratedCandidateStrip
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 2)
         .padding(.top, 4)
         .padding(.bottom, 2)
     }
@@ -2420,13 +3172,14 @@ private struct PinyinCandidateToolbar: View {
                 PinyinCandidateUtilityIconStrip(
                     dismissKeyboard: dismissKeyboard,
                     openQuickFillPanel: openQuickFillPanel,
-                    openTranslationPanel: openTranslationPanel
+                    openTranslationPanel: openTranslationPanel,
+                    openEmojiPanel: openEmojiPanel
                 )
             } else {
                 GeometryReader { proxy in
                     ScrollViewReader { scrollProxy in
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 4) {
                                 Color.clear
                                     .frame(width: 0, height: 30)
                                     .id(candidateStripLeadingAnchorID)
@@ -2448,7 +3201,9 @@ private struct PinyinCandidateToolbar: View {
                         .background(Color.primary.opacity(0.001))
                         .scrollDisabled(pinyinState.candidates.count <= 3)
                         .onChange(of: pinyinState.candidateScrollResetToken) { _ in
-                            scrollProxy.scrollTo(candidateStripLeadingAnchorID, anchor: .leading)
+                            DispatchQueue.main.async {
+                                scrollProxy.scrollTo(candidateStripLeadingAnchorID, anchor: .leading)
+                            }
                         }
                     }
                 }
@@ -2605,7 +3360,7 @@ private enum PinyinCompositionFormatter {
         let count = characters.count
         guard count > 0 else { return [] }
 
-        var best: [[String]?] = Array(repeating: nil, count: count + 1)
+        var best: [[String]] = Array(repeating: [], count: count + 1)
         best[count] = []
 
         if count > 0 {
@@ -2614,15 +3369,15 @@ private enum PinyinCompositionFormatter {
                 let maxLength = min(6, count - index)
                 for length in stride(from: maxLength, through: 1, by: -1) {
                     let syllable = String(characters[index ..< index + length])
-                    guard syllables.contains(syllable), let tail = best[index + length] else { continue }
-                    chosen = [String(characters[index ..< index + length])] + tail
+                    guard syllables.contains(syllable) else { continue }
+                    chosen = [String(characters[index ..< index + length])] + best[index + length]
                     break
                 }
-                best[index] = chosen
+                best[index] = chosen ?? [String(characters[index])] + best[index + 1]
             }
         }
 
-        return best[0] ?? [text]
+        return best[0]
     }
 }
 
@@ -2765,25 +3520,27 @@ private struct PinyinCandidateUtilityIconStrip: View {
     let dismissKeyboard: () -> Void
     let openQuickFillPanel: () -> Void
     let openTranslationPanel: () -> Void
+    let openEmojiPanel: () -> Void
 
     private var items: [PinyinUtilityIconItem] {
         [
             .init(assetName: "icons8-diversity-50", fallbackSystemName: "person.2", accessibilityLabel: "Function", action: nil),
             .init(assetName: "文本", fallbackSystemName: "textformat", accessibilityLabel: "Quick fill", action: openQuickFillPanel),
             .init(assetName: "翻译", fallbackSystemName: "text.translate", accessibilityLabel: "Translate", action: openTranslationPanel),
-            .init(assetName: "icons8-happy-50", fallbackSystemName: "face.smiling", accessibilityLabel: "Cursor", action: nil),
+            .init(assetName: "表情", fallbackSystemName: "face.smiling", accessibilityLabel: "Emoji", action: openEmojiPanel),
             .init(assetName: "icons8-happy-50", fallbackSystemName: "face.smiling", accessibilityLabel: "Emoji", action: nil),
             .init(assetName: "icons8-expand-arrow-50", fallbackSystemName: "chevron.down", accessibilityLabel: "Dismiss keyboard", action: dismissKeyboard)
         ]
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .top, spacing: 10) {
             ForEach(items) { item in
                 PinyinUtilityIconButton(item: item)
                     .frame(maxWidth: .infinity)
             }
         }
+        .padding(.horizontal, 4)
         .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .top)
     }
 }
@@ -2876,6 +3633,193 @@ private struct PinyinTranslationPanel: View {
 
     private var statusBackgroundColor: Color {
         statusForegroundColor.opacity(0.12)
+    }
+}
+
+private struct PinyinEmojiPanel: View {
+    @ObservedObject var pinyinState: PinyinKeyboardInputState
+    let insertText: (String) -> Void
+    @State private var selectedCategory: PinyinEmojiCategory = .frequent
+
+    private let columns = Array(
+        repeating: GridItem(.flexible(minimum: 34, maximum: 54), spacing: 8),
+        count: 7
+    )
+    private let tabBarHeight: CGFloat = 48
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            if availableSections.isEmpty {
+                emptyState
+            } else {
+                emojiGrid
+                categoryTabBar
+            }
+        }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.secondarySystemBackground))
+        .clipped()
+        .onAppear {
+            normalizeSelectedCategory()
+        }
+        .onChange(of: pinyinState.emojiSections) { _ in
+            normalizeSelectedCategory()
+        }
+    }
+
+    private var availableSections: [PinyinEmojiSection] {
+        pinyinState.emojiSections
+    }
+
+    private var selectedSection: PinyinEmojiSection? {
+        availableSections.first { $0.category == selectedCategory } ?? availableSections.first
+    }
+
+    private var selectedItems: [String] {
+        selectedSection?.items ?? []
+    }
+
+    private var selectedTitle: String {
+        selectedSection?.category.title ?? "表情符号"
+    }
+
+    private var emojiGrid: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(selectedItems, id: \.self) { item in
+                    emojiButton(item)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var categoryTabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(availableSections) { section in
+                    categoryTab(section.category)
+                }
+            }
+            .padding(.horizontal, 10)
+        }
+        .frame(height: tabBarHeight)
+        .background(Color(.systemBackground).opacity(0.92))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(selectedTitle)
+                .font(.system(size: 16, weight: .semibold))
+
+            HStack {
+                Button {
+                    pinyinState.setEmojiPanelVisible(false)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回键盘")
+
+                Spacer(minLength: 0)
+
+                Text("\(selectedItems.count)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(Color(.systemBackground), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private func categoryTab(_ category: PinyinEmojiCategory) -> some View {
+        let isSelected = selectedSection?.category == category
+        return Button {
+            selectedCategory = category
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: category.systemImageName)
+                    .font(.system(size: 15, weight: .semibold))
+                if isSelected {
+                    Text(category.title)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.78))
+            .padding(.horizontal, isSelected ? 10 : 8)
+            .frame(height: 32)
+            .background(isSelected ? Color.accentColor : Color(.secondarySystemBackground), in: Capsule())
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(category.title)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "face.smiling")
+                .font(.system(size: 28, weight: .regular))
+                .foregroundStyle(.secondary)
+            Text("未找到表情符号数据")
+                .font(.system(size: 15, weight: .semibold))
+            Text("请确认 RimeShared/lua/data/emoji.txt 已打包进键盘扩展")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func emojiButton(_ item: String) -> some View {
+        Button {
+            insertText(item)
+        } label: {
+            Text(item)
+                .font(.system(size: emojiFontSize(for: item), weight: .regular))
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item)
+    }
+
+    private func emojiFontSize(for item: String) -> CGFloat {
+        if selectedSection?.category == .currency || selectedSection?.category == .symbols {
+            return item.count > 2 ? 15 : 22
+        }
+        return item.count > 2 ? 16 : 25
+    }
+
+    private func normalizeSelectedCategory() {
+        guard !availableSections.isEmpty else { return }
+        if !availableSections.contains(where: { $0.category == selectedCategory }) {
+            selectedCategory = availableSections[0].category
+        }
     }
 }
 
@@ -3670,24 +4614,37 @@ private struct PinyinExpandedCandidateOverlay: View {
     @ObservedObject var pinyinState: PinyinKeyboardInputState
     let insertText: (String) -> Void
 
+    private let expandedCandidateTopAnchorID = "pinyin-expanded-candidate-top-anchor"
+
     var body: some View {
         VStack(spacing: 0) {
             collapseHeader
 
-            ScrollView(.vertical, showsIndicators: false) {
-                CandidateFlowLayout(spacing: 6) {
-                    ForEach(Array(pinyinState.candidates.enumerated()), id: \.element.id) { index, candidate in
-                        PinyinCandidateButton(
-                            candidate: candidate,
-                            index: index,
-                            expanded: true,
-                            pinyinState: pinyinState,
-                            insertText: insertText
-                        )
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    Color.clear
+                        .frame(height: 0)
+                        .id(expandedCandidateTopAnchorID)
+
+                    CandidateFlowLayout(spacing: 6) {
+                        ForEach(Array(pinyinState.candidates.enumerated()), id: \.element.id) { index, candidate in
+                            PinyinCandidateButton(
+                                candidate: candidate,
+                                index: index,
+                                expanded: true,
+                                pinyinState: pinyinState,
+                                insertText: insertText
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 8)
+                }
+                .onChange(of: pinyinState.candidateScrollResetToken) { _ in
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo(expandedCandidateTopAnchorID, anchor: .top)
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -3762,7 +4719,7 @@ private struct PinyinCandidateButton: View {
             }
                 .lineLimit(1)
                 .truncationMode(.tail)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, expanded ? 12 : 9)
             .padding(.vertical, expanded ? PinyinKeyboardMetrics.expandedCandidateVerticalPadding : 2)
             .frame(minWidth: expanded ? 56 : 48, minHeight: expanded ? PinyinKeyboardMetrics.expandedCandidateMinHitHeight : 30)
             .background(expanded ? Color.primary.opacity(0.001) : Color.clear)
