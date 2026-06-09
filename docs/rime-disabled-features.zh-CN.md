@@ -18,6 +18,10 @@
 | Lua/octagram 部署模块 | native deployer 模块列表从 `deployer,lua,octagram` 收窄为 `deployer` | `wanxiang_ios` 不依赖 Lua 或 grammar，部署阶段无需加载额外模块 | 当前基础拼音候选不受影响；依赖 Lua 或 grammar 的方案不能直接部署使用 | 恢复 Lua 或 grammar 功能时，同步把 native deployer 模块加回并真机测试部署内存 |
 | Rime 调试文件日志 | 设置 `RimeDebugLogger.isEnabled=false` | 每次按键写文件会增加键盘扩展内的磁盘写入 | 不再写入 `RimeDebug/rime-debug.log` 和 Rime 专用 JSONL 日志 | 仅在短期诊断构建中把 `isEnabled` 设回 `true` |
 
+## Grammar 集成方案
+
+Grammar 可以通过 schema 配置恢复到万象方案中，本质是 Rime schema 层的配置继承/叠加，而不是 Swift 侧继承。推荐优先使用构建期或主 App 预部署，避免键盘扩展内首次部署完整语言模型。详细方案见 `docs/plans/rime-grammar-integration-plan.zh-CN.md`。
+
 ## 仍然启用的功能
 
 基础 Rime 输入仍然启用：`wanxiang_ios` 全拼方案选择、标准候选、标点、反查、英文表候选和自定义短语。

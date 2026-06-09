@@ -19,6 +19,7 @@ STATIC_LIB_PATH="${RIME_DIR}/lib/librime.a"
 XCFRAMEWORK_PATH="${RIME_DIR}/Rime.xcframework"
 RIME_SHARED_DIR="${ROOT_DIR}/SimpaninKeyboard/RimeShared"
 RIME_SHARED_MANIFEST="${RIME_SHARED_DIR}/rime-shared-manifest.json"
+REQUIRE_WANXIANG_GRAMMAR="${REQUIRE_WANXIANG_GRAMMAR:-0}"
 REQUIRED_STATIC_LIBS=(
   "librime.a"
   "libboost_regex.a"
@@ -105,10 +106,16 @@ if [[ -f "${STATIC_LIB_PATH}" ]]; then
 
   if command -v nm >/dev/null 2>&1; then
     symbol_output="$(nm -gU "${STATIC_LIB_PATH}" 2>/dev/null || true)"
-    if grep -Eq 'rime_require_module_(lua|octagram)|luaopen_' <<<"${symbol_output}"; then
-      info "librime.a contains merged Lua/octagram plugin symbols."
+    if [[ "${REQUIRE_WANXIANG_GRAMMAR}" == "1" ]]; then
+      if grep -Eq 'rime_require_module_(octagram|grammar)' <<<"${symbol_output}"; then
+        info "librime.a contains merged octagram/grammar plugin symbols."
+      else
+        fail "librime.a does not appear to contain merged octagram/grammar plugin symbols required by Wanxiang Grammar."
+      fi
+    elif grep -Eq 'rime_require_module_(lua|octagram|grammar)|luaopen_' <<<"${symbol_output}"; then
+      info "librime.a contains merged Lua/octagram/grammar plugin symbols."
     else
-      fail "librime.a does not appear to contain merged Lua/octagram plugin symbols required by Wanxiang."
+      warn "librime.a does not appear to contain merged Lua/octagram/grammar plugin symbols. This is acceptable for the lightweight iOS schema; set REQUIRE_WANXIANG_GRAMMAR=1 when validating full Wanxiang Grammar."
     fi
   else
     warn "nm is unavailable; skipping merged plugin symbol validation."
@@ -119,14 +126,20 @@ fi
 
 if [[ -d "${RIME_SHARED_DIR}" ]]; then
   info "Found RimeShared resource directory."
-  for required_resource in \
+  required_resources=(
     "default.yaml" \
     "wanxiang.schema.yaml" \
     "wanxiang.dict.yaml" \
-    "wanxiang-lts-zh-hans.gram" \
     "lua/wanxiang/wanxiang.lua" \
     "dicts/jichu.dict.yaml" \
-    "dicts/lianxiang.dict.yaml"; do
+    "dicts/lianxiang.dict.yaml"
+  )
+
+  if [[ "${REQUIRE_WANXIANG_GRAMMAR}" == "1" ]]; then
+    required_resources+=("wanxiang-lts-zh-hans.gram")
+  fi
+
+  for required_resource in "${required_resources[@]}"; do
     if [[ -f "${RIME_SHARED_DIR}/${required_resource}" ]]; then
       info "Found RimeShared/${required_resource}"
     else

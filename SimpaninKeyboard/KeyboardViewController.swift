@@ -72,7 +72,7 @@ private enum PinyinKeyboardMetrics {
     static let expandedCandidateVerticalPadding: CGFloat = 10
     static let utilityIconPointSize: CGFloat = 24
     static let quickFillPanelAnimationDuration: TimeInterval = 0.22
-    static let bottomRowKeyHeight: CGFloat = 42
+    static let bottomRowKeyHeight: CGFloat = 48
     static let bottomRowHorizontalInset: CGFloat = 3
     static let bottomRowShadowBottomInset: CGFloat = 4
 }
@@ -111,6 +111,12 @@ private struct RimeSharedManifest: Codable, Equatable {
 private struct RimeManagedDataInstallation {
     let didUpdateResources: Bool
     let manifest: RimeSharedManifest
+}
+
+private struct RimePreparedDataCache {
+    let preparation: RimeUserDataPreparation
+    let bundledBuildSummary: String
+    let userBuildSummary: String
 }
 
 private struct RimeDeploymentMarker: Codable, Equatable {
@@ -243,6 +249,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+    private static let rimePreparationCacheQueue = DispatchQueue(label: "com.local.simpanin.keyboard.rime-preparation-cache")
+    private static var rimePreparationCache: RimePreparedDataCache?
 
     private var engine: any KeyboardInputEngine = RimeInputEngine()
     private let rimeInitializationQueue = DispatchQueue(label: "com.local.simpanin.keyboard.rime-initialization", qos: .userInitiated)
@@ -388,13 +396,17 @@ private final class PinyinKeyboardInputState: ObservableObject {
 
     private func makeRimeInputEngine() -> any KeyboardInputEngine {
         var rimeEngine = RimeInputEngine()
+        let startTime = CFAbsoluteTimeGetCurrent()
         do {
             let preparedData = try prepareRimeUserData()
+            let preparationTimeMS = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
             rimeEngine.initializeRimeIfPossible(
                 sharedDataURL: preparedData.sharedDataURL,
                 userDataURL: preparedData.userDataURL,
                 deployIfNeeded: preparedData.deployIfNeeded
             )
+            let totalTimeMS = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            Self.logInputEngineInfo("rime engine make finished preparationMS=\(preparationTimeMS), totalMS=\(totalTimeMS), isUsingRime=\(rimeEngine.isUsingRime)")
             if preparedData.deployIfNeeded,
                rimeEngine.isUsingRime,
                let deploymentMarker = preparedData.deploymentMarker,
@@ -406,6 +418,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
                 }
             }
         } catch {
+            let totalTimeMS = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            Self.logInputEngineInfo("rime engine make failed totalMS=\(totalTimeMS), error=\(error.localizedDescription)")
             rimeEngine.setPreparationFailure(error.localizedDescription)
         }
         return rimeEngine
@@ -481,6 +495,13 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     private func prepareRimeUserData() throws -> RimeUserDataPreparation {
+        if let cachedPreparation = Self.cachedRimePreparation() {
+            Self.logInputEngineInfo(
+                "rime data prepared from cache bundledShared=true, bundledBuild=\(cachedPreparation.bundledBuildSummary), userBuild=\(cachedPreparation.userBuildSummary), deployInKeyboard=false"
+            )
+            return cachedPreparation.preparation
+        }
+
         guard let bundledRimeSharedDataURL else {
             throw RimeDataPreparationError.bundledSharedDataMissing
         }
@@ -506,11 +527,13 @@ private final class PinyinKeyboardInputState: ObservableObject {
         let hasUserBuild = Self.rimeBuildIsInstalled(in: userDataURL, schemaID: manifest.schemaID)
         let hasCurrentBuild = hasBundledBuild || hasUserBuild
         let hasCurrentDeploymentMarker = Self.installedRimeDeploymentMarker(at: deploymentMarkerURL) == deploymentMarker
+        let bundledBuildSummary = Self.rimeBuildDiagnosticSummary(in: bundledRimeSharedDataURL, schemaID: manifest.schemaID)
+        let userBuildSummary = Self.rimeBuildDiagnosticSummary(in: userDataURL, schemaID: manifest.schemaID)
         Self.logInputEngineInfo(
-            "rime bundled build detail: \(Self.rimeBuildDiagnosticSummary(in: bundledRimeSharedDataURL, schemaID: manifest.schemaID))"
+            "rime bundled build detail: \(bundledBuildSummary)"
         )
         Self.logInputEngineInfo(
-            "rime user build detail: \(Self.rimeBuildDiagnosticSummary(in: userDataURL, schemaID: manifest.schemaID))"
+            "rime user build detail: \(userBuildSummary)"
         )
         Self.logInputEngineInfo(
             "rime data prepared bundledShared=true, hasBundledBuild=\(hasBundledBuild), hasUserBuild=\(hasUserBuild), hasBuild=\(hasCurrentBuild), hasMarker=\(hasCurrentDeploymentMarker), deployInKeyboard=false"
@@ -526,13 +549,29 @@ private final class PinyinKeyboardInputState: ObservableObject {
             throw RimeDataPreparationError.prebuiltDeploymentMissing(schemaID: manifest.schemaID)
         }
 
-        return RimeUserDataPreparation(
+        let preparation = RimeUserDataPreparation(
             sharedDataURL: bundledRimeSharedDataURL,
             userDataURL: userDataURL,
             deployIfNeeded: false,
             deploymentMarker: deploymentMarker,
             deploymentMarkerURL: deploymentMarkerURL
         )
+        Self.cacheRimePreparation(
+            RimePreparedDataCache(
+                preparation: preparation,
+                bundledBuildSummary: bundledBuildSummary,
+                userBuildSummary: userBuildSummary
+            )
+        )
+        return preparation
+    }
+
+    private static func cachedRimePreparation() -> RimePreparedDataCache? {
+        rimePreparationCacheQueue.sync { rimePreparationCache }
+    }
+
+    private static func cacheRimePreparation(_ cache: RimePreparedDataCache) {
+        rimePreparationCacheQueue.sync { rimePreparationCache = cache }
     }
 
     private func installManagedRimeSharedData(from sourceURL: URL, to userDataURL: URL) throws -> RimeManagedDataInstallation {
@@ -2667,6 +2706,15 @@ private struct PinyinNineGridNumericKeyboard: View {
     let switchToAlphabetic: () -> Void
     let closeNineGrid: () -> Void
 
+    private let keySpacing: CGFloat = 7
+    private let bottomRowHeightIncrease: CGFloat = 8
+    private let minimumRowHeight: CGFloat = 36
+
+    private struct NineGridRowHeights {
+        let standard: CGFloat
+        let bottom: CGFloat
+    }
+
     private let numberSymbolKeys: [PinyinNumberSymbolKey] = [
         .init(value: "+"),
         .init(value: "-", title: "−"),
@@ -2713,23 +2761,25 @@ private struct PinyinNineGridNumericKeyboard: View {
             let availableWidth = max(0, proxy.size.width - horizontalPadding - columnSpacing * 2)
             let sideColumnWidth = max(48, min(62, availableWidth * 0.18))
             let centerColumnWidth = max(0, availableWidth - sideColumnWidth * 2)
+            let rowHeights = verticalRowHeights(for: proxy.size.height - 10)
 
-            HStack(spacing: 7) {
-                leftSymbolColumn(availableHeight: proxy.size.height - 10)
+            HStack(spacing: keySpacing) {
+                leftSymbolColumn(rowHeights: rowHeights)
                     .frame(width: sideColumnWidth)
 
-                VStack(spacing: 7) {
-                    ForEach(Array(numberRows.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 7) {
+                VStack(spacing: keySpacing) {
+                    ForEach(Array(numberRows.enumerated()), id: \.offset) { index, row in
+                        HStack(spacing: keySpacing) {
                             ForEach(row) { key in
                                 keyButton(key)
                             }
                         }
+                        .frame(height: index == numberRows.count - 1 ? rowHeights.bottom : rowHeights.standard)
                     }
                 }
                 .frame(width: centerColumnWidth)
 
-                keyColumn(functionKeys)
+                keyColumn(functionKeys, rowHeights: rowHeights)
                     .frame(width: sideColumnWidth)
             }
             .padding(.horizontal, 6)
@@ -2740,26 +2790,45 @@ private struct PinyinNineGridNumericKeyboard: View {
         }
     }
 
-    private func leftSymbolColumn(availableHeight: CGFloat) -> some View {
-        let keySpacing: CGFloat = 7
-        let bottomKeyHeight = max(36, (availableHeight - keySpacing * 3) / 4)
-        let symbolColumnHeight = max(0, availableHeight - bottomKeyHeight - keySpacing)
-
-        return VStack(spacing: keySpacing) {
+    private func leftSymbolColumn(rowHeights: NineGridRowHeights) -> some View {
+        VStack(spacing: keySpacing) {
             PinyinNumberSymbolScrollColumn(symbols: numberSymbolKeys, insertText: insertText)
-                .frame(height: symbolColumnHeight)
+                .frame(height: rowHeights.standard * 3 + keySpacing * 2)
 
             keyButton(.control(id: "back", title: "返回"))
-                .frame(height: bottomKeyHeight)
+                .frame(height: rowHeights.bottom)
         }
     }
 
-    private func keyColumn(_ keys: [PinyinNineGridKey]) -> some View {
-        VStack(spacing: 7) {
-            ForEach(keys) { key in
+    private func keyColumn(_ keys: [PinyinNineGridKey], rowHeights: NineGridRowHeights) -> some View {
+        VStack(spacing: keySpacing) {
+            ForEach(Array(keys.enumerated()), id: \.element.id) { index, key in
                 keyButton(key)
+                    .frame(height: index == keys.count - 1 ? rowHeights.bottom : rowHeights.standard)
             }
         }
+    }
+
+    private func verticalRowHeights(for availableHeight: CGFloat) -> NineGridRowHeights {
+        let spacingTotal = keySpacing * 3
+        let contentHeight = max(0, availableHeight - spacingTotal)
+        let evenRowHeight = contentHeight / 4
+        let desiredBottomHeight = evenRowHeight + bottomRowHeightIncrease
+
+        let bottomHeight: CGFloat
+        let standardHeight: CGFloat
+        if contentHeight >= minimumRowHeight * 4 + bottomRowHeightIncrease {
+            bottomHeight = desiredBottomHeight
+            standardHeight = (contentHeight - bottomHeight) / 3
+        } else if contentHeight >= minimumRowHeight * 4 {
+            standardHeight = minimumRowHeight
+            bottomHeight = contentHeight - standardHeight * 3
+        } else {
+            standardHeight = evenRowHeight
+            bottomHeight = evenRowHeight
+        }
+
+        return NineGridRowHeights(standard: standardHeight, bottom: bottomHeight)
     }
 
     private func keyButton(_ key: PinyinNineGridKey) -> some View {
@@ -2792,8 +2861,21 @@ private struct PinyinNineGridNumericKeyboard: View {
         switch key {
         case .text:
             return .input
-        case .backspace, .returnKey, .control:
+        case .backspace:
             return .function
+        case .returnKey:
+            return .returnKey
+        case .control(let id, _):
+            return id == "back" ? .returnKey : .function
+        }
+    }
+
+    private func foregroundColor(for key: PinyinNineGridKey) -> Color {
+        switch buttonRole(for: key) {
+        case .returnKey:
+            return .white
+        case .input, .function, .symbolOption:
+            return .primary
         }
     }
 
@@ -2802,22 +2884,22 @@ private struct PinyinNineGridNumericKeyboard: View {
             switch key {
             case .text(let value, let title):
                 Text(title ?? value)
-                    .font(.system(size: 24, weight: .medium))
+                    .font(.system(size: 24, weight: .regular))
                     .monospacedDigit()
             case .backspace:
                 Image(systemName: "delete.left")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 20, weight: .regular))
             case .returnKey:
                 Image(systemName: "return")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 20, weight: .regular))
             case .control(_, let title):
                 Text(title)
-                    .font(.system(size: title.contains("\n") ? 13 : 15, weight: .semibold))
+                    .font(.system(size: title.contains("\n") ? 13 : 15, weight: .regular))
                     .multilineTextAlignment(.center)
                     .monospacedDigit()
             }
         }
-        .foregroundStyle(.primary)
+        .foregroundStyle(foregroundColor(for: key))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
     }
@@ -2827,6 +2909,7 @@ private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
     enum Role {
         case input
         case function
+        case returnKey
         case symbolOption
     }
 
@@ -2836,7 +2919,7 @@ private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
         switch role {
         case .symbolOption:
             return 0
-        case .input, .function:
+        case .input, .function, .returnKey:
             return 7
         }
     }
@@ -2847,6 +2930,8 @@ private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
             return Color(.systemBackground)
         case .function:
             return Color(UIColor.systemGray5.withAlphaComponent(0.96))
+        case .returnKey:
+            return Color(.systemBlue)
         }
     }
 
@@ -2856,11 +2941,13 @@ private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
             return Color(UIColor.systemGray3)
         case .function:
             return Color(UIColor.systemGray2)
+        case .returnKey:
+            return Color(UIColor.systemBlue.withAlphaComponent(0.82))
         }
     }
 
     private var shadowOpacity: Double {
-        role == .symbolOption ? 0 : 0.20
+        0
     }
 
     func makeBody(configuration: Configuration) -> some View {
@@ -2871,10 +2958,10 @@ private struct PinyinNineGridKeyButtonStyle: ButtonStyle {
             )
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(role == .symbolOption ? 0 : 0.045), lineWidth: 0.5)
+                    .stroke(Color.primary.opacity(role == .symbolOption || role == .returnKey ? 0 : 0.045), lineWidth: 0.5)
             }
             .shadow(
-                color: Color.black.opacity(configuration.isPressed ? 0.02 : shadowOpacity),
+                color: Color.black.opacity(shadowOpacity),
                 radius: 0,
                 x: 0,
                 y: configuration.isPressed ? 0 : 1.2
@@ -2904,7 +2991,7 @@ private struct PinyinNumberSymbolScrollColumn: View {
                             insertText(symbol.value)
                         } label: {
                             Text(symbol.title)
-                                .font(.system(size: 23, weight: .medium))
+                                .font(.system(size: 23, weight: .regular))
                                 .monospacedDigit()
                                 .minimumScaleFactor(0.75)
                                 .lineLimit(1)
@@ -2928,7 +3015,7 @@ private struct PinyinNumberSymbolScrollColumn: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.primary.opacity(0.045), lineWidth: 0.5)
             }
-            .shadow(color: Color.black.opacity(0.16), radius: 0, x: 0, y: 1.2)
+            .shadow(color: Color.black.opacity(0), radius: 0, x: 0, y: 0)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
@@ -3044,14 +3131,7 @@ private struct PinyinShiftButtonContent: View {
     }
 
     private var bundleImage: UIImage? {
-        guard let url = Bundle(for: KeyboardViewController.self).url(
-            forResource: imageName,
-            withExtension: "png",
-            subdirectory: "ios-icon"
-        ) else {
-            return nil
-        }
-        return UIImage(contentsOfFile: url.path)
+        PinyinKeyboardImageLoader.image(named: imageName)
     }
 
     private var imageName: String {
@@ -4598,15 +4678,29 @@ private struct PinyinUtilityIconButton: View {
 }
 
 private enum PinyinKeyboardImageLoader {
+    private static let cache = NSCache<NSString, UIImage>()
+
     static func image(named name: String) -> UIImage? {
+        let cacheKey = name as NSString
+        if let cachedImage = cache.object(forKey: cacheKey) {
+            return cachedImage
+        }
+
+        let image: UIImage?
         if let url = Bundle(for: KeyboardViewController.self).url(
             forResource: name,
             withExtension: "png",
             subdirectory: "ios-icon"
         ) {
-            return UIImage(contentsOfFile: url.path)
+            image = UIImage(contentsOfFile: url.path)
+        } else {
+            image = UIImage(named: name)
         }
-        return UIImage(named: name)
+
+        if let image {
+            cache.setObject(image, forKey: cacheKey)
+        }
+        return image
     }
 }
 

@@ -7,6 +7,8 @@ SHARED_DIR="${ROOT_DIR}/SimpaninKeyboard/RimeShared"
 USER_DIR="${TMPDIR:-/tmp}/simpanin-rime-user-prebuild"
 SCHEMA_ID="${SCHEMA_ID:-wanxiang}"
 TABLE_NAME="${TABLE_NAME:-wanxiang}"
+REQUIRE_GRAMMAR="${REQUIRE_GRAMMAR:-0}"
+GRAMMAR_NAME="${GRAMMAR_NAME:-wanxiang-lts-zh-hans.gram}"
 
 info() {
   printf '==> %s\n' "$1"
@@ -103,6 +105,10 @@ required=(
   "${TABLE_NAME}.table.bin"
 )
 
+if [[ "${REQUIRE_GRAMMAR}" == "1" ]]; then
+  [[ -f "${SHARED_DIR}/${GRAMMAR_NAME}" ]] || fail "缺少 Grammar 语言模型：${GRAMMAR_NAME}。如需启用 Grammar，请先把该文件放入 RimeShared。"
+fi
+
 info "Deploying ${SCHEMA_ID} into temporary user dir: ${USER_DIR}"
 rm -rf "${SHARED_DIR}/build"
 if ! "${DEPLOYER}" --build "${SHARED_DIR}" "${USER_DIR}"; then
@@ -129,3 +135,6 @@ info "Done. Required products:"
 for file in "${required[@]}"; do
   ls -lh "${SHARED_DIR}/build/${file}"
 done
+if [[ "${REQUIRE_GRAMMAR}" == "1" ]]; then
+  ls -lh "${SHARED_DIR}/${GRAMMAR_NAME}"
+fi
