@@ -14,13 +14,13 @@
 		222222222222222222222101 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222001 /* KeyboardViewController.swift */; };
 		222222222222222222222113 /* RimeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222123 /* RimeBridge.swift */; };
 		222222222222222222222114 /* RimeInputEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222124 /* RimeInputEngine.swift */; };
+		222222222222222222222115 /* LocalPredictionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222125 /* LocalPredictionStore.swift */; };
 		444444444444444444444101 /* RimeNativeBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 444444444444444444444002 /* RimeNativeBridge.mm */; };
 		444444444444444444444102 /* RimeShared in Resources */ = {isa = PBXBuildFile; fileRef = 444444444444444444444004 /* RimeShared */; };
 		222222222222222222222102 /* SimpaninKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 222222222222222222222003 /* SimpaninKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		222222222222222222222104 /* rime-frost-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222005 /* rime-frost-LICENSE.txt */; };
 		222222222222222222222109 /* rime-frost-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 222222222222222222222009 /* rime-frost-NOTICE.txt */; };
 		333333333333333333333101 /* ios-icon in Resources */ = {isa = PBXBuildFile; fileRef = 333333333333333333333001 /* ios-icon */; };
-		555555555555555555555101 /* NotoSansCJKsc-Regular.otf in Resources */ = {isa = PBXBuildFile; fileRef = 555555555555555555555001 /* NotoSansCJKsc-Regular.otf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,12 +61,12 @@
 		222222222222222222222009 /* rime-frost-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ThirdPartyLicenses/rime-frost-NOTICE.txt"; sourceTree = "<group>"; };
 		222222222222222222222123 /* RimeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeBridge.swift; sourceTree = "<group>"; };
 		222222222222222222222124 /* RimeInputEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RimeInputEngine.swift; sourceTree = "<group>"; };
+		222222222222222222222125 /* LocalPredictionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPredictionStore.swift; sourceTree = "<group>"; };
 		444444444444444444444001 /* RimeNativeBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RimeNativeBridge.h; sourceTree = "<group>"; };
 		444444444444444444444002 /* RimeNativeBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RimeNativeBridge.mm; sourceTree = "<group>"; };
 		444444444444444444444003 /* SimpaninKeyboard-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SimpaninKeyboard-Bridging-Header.h"; sourceTree = "<group>"; };
 		444444444444444444444004 /* RimeShared */ = {isa = PBXFileReference; lastKnownFileType = folder; path = RimeShared; sourceTree = "<group>"; };
 		333333333333333333333001 /* ios-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "ios-icon"; sourceTree = SOURCE_ROOT; };
-		555555555555555555555001 /* NotoSansCJKsc-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Fonts/NotoSansCJKsc-Regular.otf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,11 +124,11 @@
 				222222222222222222222001 /* KeyboardViewController.swift */,
 				222222222222222222222123 /* RimeBridge.swift */,
 				222222222222222222222124 /* RimeInputEngine.swift */,
+				222222222222222222222125 /* LocalPredictionStore.swift */,
 				444444444444444444444001 /* RimeNativeBridge.h */,
 				444444444444444444444002 /* RimeNativeBridge.mm */,
 				444444444444444444444003 /* SimpaninKeyboard-Bridging-Header.h */,
 				444444444444444444444004 /* RimeShared */,
-				555555555555555555555001 /* NotoSansCJKsc-Regular.otf */,
 				222222222222222222222002 /* Info.plist */,
 				222222222222222222222006 /* SimpaninKeyboard.entitlements */,
 				222222222222222222222005 /* rime-frost-LICENSE.txt */,
@@ -237,7 +237,6 @@
 			files = (
 				222222222222222222222104 /* rime-frost-LICENSE.txt in Resources */,
 				222222222222222222222109 /* rime-frost-NOTICE.txt in Resources */,
-				555555555555555555555101 /* NotoSansCJKsc-Regular.otf in Resources */,
 				444444444444444444444102 /* RimeShared in Resources */,
 				333333333333333333333101 /* ios-icon in Resources */,
 			);
@@ -262,6 +261,7 @@
 				222222222222222222222101 /* KeyboardViewController.swift in Sources */,
 				222222222222222222222113 /* RimeBridge.swift in Sources */,
 				222222222222222222222114 /* RimeInputEngine.swift in Sources */,
+				222222222222222222222115 /* LocalPredictionStore.swift in Sources */,
 				444444444444444444444101 /* RimeNativeBridge.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

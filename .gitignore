@@ -11,6 +11,7 @@ xcuserdata/
 # Local build/package outputs
 build/
 *.ipa
+SimpaninKeyboard/RimeShared/*.gram
 
 # Local logs and crash reports
 *.log

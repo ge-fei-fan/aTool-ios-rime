@@ -213,11 +213,11 @@ final class RimeBridge {
                     userDataDirectory: userDataURL.path,
                     deployIfNeeded: deployIfNeeded
                 )
-                nativeBridge.setOption("ascii_mode", enabled: false)
+                applyDefaultOptions()
                 isInitialized = true
                 lastError = nil
                 RimeDebugLogger.record(
-                    "initialize ok deployIfNeeded=\(deployIfNeeded) asciiMode=\(nativeBridge.getOption("ascii_mode")) shared=\(sharedDataURL.path) user=\(userDataURL.path)"
+                    "initialize ok deployIfNeeded=\(deployIfNeeded) asciiMode=\(nativeBridge.getOption("ascii_mode")) prediction=\(nativeBridge.getOption("prediction")) shared=\(sharedDataURL.path) user=\(userDataURL.path)"
                 )
             } catch {
                 let bridgeError = RimeBridgeError.initializationFailed(error.localizedDescription)
@@ -235,10 +235,10 @@ final class RimeBridge {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return }
             nativeBridge.reset()
-            nativeBridge.setOption("ascii_mode", enabled: false)
+            applyDefaultOptions()
             pendingCommitText = ""
             rawTypedInput = ""
-            RimeDebugLogger.record("reset asciiMode=\(nativeBridge.getOption("ascii_mode"))")
+            RimeDebugLogger.record("reset asciiMode=\(nativeBridge.getOption("ascii_mode")) prediction=\(nativeBridge.getOption("prediction"))")
         }
     }
 
@@ -261,9 +261,8 @@ final class RimeBridge {
             guard let rimeScalar = rimeLetter.unicodeScalars.first, rimeLetter.unicodeScalars.count == 1 else { return }
             let didConsume = nativeBridge.processKeyCode(Int(rimeScalar.value), mask: 0)
             if didConsume {
-                rawTypedInput.append(letter)
+                syncAfterRimeStateChange()
             }
-            collectPendingCommitText()
             logCurrentState(action: "insert", details: "letter=\(letter) rimeLetter=\(rimeLetter) code=\(rimeScalar.value) consumed=\(didConsume)")
         }
     }
@@ -272,10 +271,9 @@ final class RimeBridge {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return false }
             let didConsume = nativeBridge.processKeyCode(KeyCode.backspace, mask: 0)
-            if didConsume, !rawTypedInput.isEmpty {
-                rawTypedInput.removeLast()
+            if didConsume {
+                syncAfterRimeStateChange()
             }
-            collectPendingCommitText()
             logCurrentState(action: "delete", details: "consumed=\(didConsume)")
             return didConsume
         }
@@ -337,6 +335,13 @@ final class RimeBridge {
         }
     }
 
+    var isPredictionComposition: Bool {
+        queue.sync {
+            guard isInitialized, nativeBridge.initialized else { return false }
+            return Self.isPredictionInput(currentInputText())
+        }
+    }
+
     var candidates: [RimeCandidate] {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return [] }
@@ -379,9 +384,8 @@ final class RimeBridge {
                 logCurrentState(action: "select", details: "index=\(index) success=false")
                 return nil
             }
-            collectPendingCommitText()
+            syncAfterRimeStateChange()
             let text = consumePendingCommitText()
-            rawTypedInput = nativeBridge.currentContext()?.input ?? ""
             logCurrentState(action: "select", details: "index=\(index) success=true commit=\(text ?? "<nil>")")
             return text
         }
@@ -390,14 +394,16 @@ final class RimeBridge {
     func commitCompositionAsText() -> String? {
         queue.sync {
             guard isInitialized, nativeBridge.initialized else { return nil }
+            syncAfterRimeStateChange()
             if let text = consumePendingCommitText() {
                 return text
             }
             if let text = nativeBridge.commitComposition(), !text.isEmpty {
+                syncAfterRimeStateChange()
                 RimeDebugLogger.record("commitComposition direct commit=\(text)")
                 return text
             }
-            collectPendingCommitText()
+            syncAfterRimeStateChange()
             let text = consumePendingCommitText()
             logCurrentState(action: "commitComposition", details: "commit=\(text ?? "<nil>")")
             return text
@@ -426,6 +432,31 @@ final class RimeBridge {
             return letter
         }
         return letter.lowercased()
+    }
+
+    private func applyDefaultOptions() {
+        nativeBridge.setOption("ascii_mode", enabled: false)
+        nativeBridge.setOption("prediction", enabled: true)
+    }
+
+    private func currentInputText() -> String {
+        if !rawTypedInput.isEmpty {
+            return rawTypedInput
+        }
+        return nativeBridge.currentContext()?.input ?? ""
+    }
+
+    private func syncRawTypedInputFromContext() {
+        rawTypedInput = nativeBridge.currentContext()?.input ?? ""
+    }
+
+    private func syncAfterRimeStateChange() {
+        collectPendingCommitText()
+        syncRawTypedInputFromContext()
+    }
+
+    private static func isPredictionInput(_ text: String) -> Bool {
+        !text.isEmpty && text.allSatisfy { $0 == "›" }
     }
 
     private func logCurrentState(action: String, details: String) {

@@ -1,19 +1,58 @@
 import Foundation
 
+enum KeyboardInputCandidateSource: Equatable {
+    case rime(Int)
+    case localPrediction(Int)
+    case none
+
+    var rimeIndex: Int? {
+        if case .rime(let index) = self {
+            return index
+        }
+        return nil
+    }
+
+    var isLocalPrediction: Bool {
+        if case .localPrediction = self {
+            return true
+        }
+        return false
+    }
+
+    var idPrefix: String {
+        switch self {
+        case .rime(let index):
+            return "rime:\(index)"
+        case .localPrediction(let index):
+            return "localPrediction:\(index)"
+        case .none:
+            return "none"
+        }
+    }
+}
+
 struct KeyboardInputCandidate: Identifiable, Equatable {
     let text: String
     let consumeLength: Int
     let comment: String?
-    let rimeIndex: Int?
+    let source: KeyboardInputCandidateSource
 
-    init(text: String, consumeLength: Int, comment: String? = nil, rimeIndex: Int? = nil) {
+    init(
+        text: String,
+        consumeLength: Int,
+        comment: String? = nil,
+        rimeIndex: Int? = nil,
+        source: KeyboardInputCandidateSource? = nil
+    ) {
         self.text = text
         self.consumeLength = consumeLength
         self.comment = comment
-        self.rimeIndex = rimeIndex
+        self.source = source ?? rimeIndex.map { .rime($0) } ?? .none
     }
 
-    var id: String { "\(rimeIndex ?? -1)\t\(text)\t\(consumeLength)\t\(comment ?? "")" }
+    var rimeIndex: Int? { source.rimeIndex }
+    var isLocalPrediction: Bool { source.isLocalPrediction }
+    var id: String { "\(source.idPrefix)\t\(text)\t\(consumeLength)\t\(comment ?? "")" }
 }
 
 protocol KeyboardInputEngine {
@@ -22,6 +61,7 @@ protocol KeyboardInputEngine {
     var rawPinyin: String { get }
     var displayText: String { get }
     var hasComposition: Bool { get }
+    var isPredictionComposition: Bool { get }
     var displayCursorOffset: Int { get }
     var candidates: [KeyboardInputCandidate] { get }
 
@@ -62,6 +102,10 @@ struct RimeInputEngine: KeyboardInputEngine {
 
     var hasComposition: Bool {
         bridge.isAvailable ? bridge.hasComposition : failureText != nil
+    }
+
+    var isPredictionComposition: Bool {
+        bridge.isAvailable ? bridge.isPredictionComposition : false
     }
 
     var displayCursorOffset: Int {
@@ -134,6 +178,9 @@ struct RimeInputEngine: KeyboardInputEngine {
     }
 
     mutating func select(_ candidate: KeyboardInputCandidate) -> String? {
+        if candidate.isLocalPrediction {
+            return candidate.text
+        }
         if bridge.isAvailable, let index = candidate.rimeIndex {
             return bridge.selectCandidate(at: index)
         }

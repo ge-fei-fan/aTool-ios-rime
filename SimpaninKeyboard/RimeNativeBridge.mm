@@ -137,10 +137,8 @@ static NSError *RimeNativeError(NSInteger code, NSString *message) {
     traits.log_dir = logPath.c_str();
     traits.prebuilt_data_dir = prebuiltDataPath.c_str();
     traits.staging_dir = stagingDataPath.c_str();
-    // Keep the keyboard-extension runtime as small as possible. The iOS schema
-    // used by this target is intentionally Lua-free; loading librime-lua here
-    // adds startup/memory pressure and can make the extension get killed while
-    // switching keyboards.
+    // Keep the keyboard-extension runtime Lua-free. iOS prediction is handled
+    // in Swift to avoid loading Wanxiang's full Lua pipeline inside the extension.
     traits.modules = nullptr;
 
     _api->setup(&traits);

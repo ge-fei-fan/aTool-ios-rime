@@ -13,12 +13,17 @@ set -euo pipefail
 #   CONFIGURATION="Release"
 #   APP_NAME="Simpanin"
 #   OUTPUT_NAME="Simpanin-TrollStore.ipa"
+#   INCLUDE_GRAMMAR="0" # Set to 1 to download and bundle wanxiang-lts-zh-hans.gram
+#   GRAMMAR_NAME="wanxiang-lts-zh-hans.gram"
+#   GRAMMAR_ASSET_SHA256="..." # Optional sha256 validation when INCLUDE_GRAMMAR=1
 
 PROJECT="${PROJECT:-Simpanin.xcodeproj}"
 SCHEME="${SCHEME:-Simpanin}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 APP_NAME="${APP_NAME:-Simpanin}"
 OUTPUT_NAME="${OUTPUT_NAME:-${APP_NAME}-TrollStore.ipa}"
+INCLUDE_GRAMMAR="${INCLUDE_GRAMMAR:-0}"
+GRAMMAR_NAME="${GRAMMAR_NAME:-wanxiang-lts-zh-hans.gram}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/build/trollstore"
@@ -34,6 +39,8 @@ echo "==> Project: ${PROJECT}"
 echo "==> Scheme: ${SCHEME}"
 echo "==> Configuration: ${CONFIGURATION}"
 echo "==> Output: ${IPA_PATH}"
+echo "==> Include Grammar: ${INCLUDE_GRAMMAR}"
+echo "==> Grammar Name: ${GRAMMAR_NAME}"
 
 cd "${ROOT_DIR}"
 
@@ -41,8 +48,17 @@ echo "==> Cleaning old build artifacts..."
 rm -rf "${BUILD_DIR}" "${IPA_PATH}"
 mkdir -p "${BUILD_DIR}"
 
+if [[ "${INCLUDE_GRAMMAR}" == "1" ]]; then
+  echo "==> Syncing bundled Rime data with Grammar..."
+  bash "${ROOT_DIR}/Scripts/sync-rime-wanxiang.sh"
+fi
+
 echo "==> Prebuilding bundled Rime data..."
-bash "${ROOT_DIR}/Scripts/prebuild-rime-shared.sh"
+if [[ "${INCLUDE_GRAMMAR}" == "1" ]]; then
+  REQUIRE_GRAMMAR=1 bash "${ROOT_DIR}/Scripts/prebuild-rime-shared.sh"
+else
+  bash "${ROOT_DIR}/Scripts/prebuild-rime-shared.sh"
+fi
 
 echo "==> Building unsigned iPhoneOS app..."
 xcodebuild \
@@ -60,6 +76,39 @@ if [[ ! -d "${APP_PATH}" ]]; then
   echo "error: app not found: ${APP_PATH}" >&2
   echo "Try checking APP_NAME, SCHEME, or build output above." >&2
   exit 1
+fi
+
+if [[ "${INCLUDE_GRAMMAR}" != "1" ]]; then
+  echo "==> Removing Grammar model from built app..."
+  while IFS= read -r -d '' grammar_file; do
+    echo "    remove ${grammar_file}"
+    rm -f "${grammar_file}"
+  done < <(find "${APP_PATH}" -type f -name "${GRAMMAR_NAME}" -print0)
+
+  while IFS= read -r -d '' manifest_file; do
+    echo "    update ${manifest_file}"
+    python3 - "${manifest_file}" "${GRAMMAR_NAME}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+grammar_name = sys.argv[2]
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+manifest["files"] = [
+    entry for entry in manifest.get("files", [])
+    if Path(entry.get("path", "")).name != grammar_name
+]
+manifest["grammarAssetName"] = None
+manifest["grammarAssetSHA256"] = None
+
+manifest_path.write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  done < <(find "${APP_PATH}" -type f -name "rime-shared-manifest.json" -print0)
 fi
 
 sign_binary_with_ldid() {

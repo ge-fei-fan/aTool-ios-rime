@@ -75,6 +75,8 @@ private enum PinyinKeyboardMetrics {
     static let bottomRowKeyHeight: CGFloat = 48
     static let bottomRowHorizontalInset: CGFloat = 3
     static let bottomRowShadowBottomInset: CGFloat = 4
+    static let numericSymbolicThirdRowSideGap: CGFloat = 10
+    static let shijianQuickLookupPanelHeight: CGFloat = 218
 }
 
 private enum PinyinBottomRowWidthConfig {
@@ -224,6 +226,29 @@ private struct PinyinEmojiSection: Identifiable, Equatable {
     var id: PinyinEmojiCategory { category }
 }
 
+private struct PinyinShijianQuickCommand: Identifiable, Equatable {
+    let code: String
+    let title: String
+    let detail: String
+
+    var id: String { code }
+
+    static let all: [PinyinShijianQuickCommand] = [
+        .init(code: "/sj", title: "时间", detail: "输出当前时间"),
+        .init(code: "/rq", title: "日期", detail: "输出当前日期"),
+        .init(code: "/nl", title: "农历", detail: "输出农历日期"),
+        .init(code: "/xq", title: "星期", detail: "输出今天是星期几"),
+        .init(code: "/ww", title: "年中周", detail: "输出今天是今年的第几周"),
+        .init(code: "/jq", title: "节气", detail: "输出临近节气"),
+        .init(code: "/dt", title: "日期+时间", detail: "综合输出日期和时间"),
+        .init(code: "/tt", title: "时间戳", detail: "输出当前时间戳"),
+        .init(code: "/utc", title: "时区查询", detail: "查询热门城市 UTC 时间"),
+        .init(code: "/jr", title: "节日", detail: "输出近期节日"),
+        .init(code: "/day", title: "问候模板", detail: "输出早安、午安、晚安等问候语"),
+        .init(code: "/rc", title: "日期差", detail: "输入天数后用 + 或 - 计算日期")
+    ]
+}
+
 private final class PinyinKeyboardInputState: ObservableObject {
     private struct PartialSelectionStep: Equatable {
         let committedText: String
@@ -253,7 +278,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private static var rimePreparationCache: RimePreparedDataCache?
 
     private var engine: any KeyboardInputEngine = RimeInputEngine()
-    private let rimeInitializationQueue = DispatchQueue(label: "com.local.simpanin.keyboard.rime-initialization", qos: .userInitiated)
+    private let localPredictionStore = LocalPredictionStore.shared
+    private let rimeInitializationQueue = DispatchQueue(label: "com.local.simpanin.keyboard.rime-initialization", qos: .utility)
     private var rimeInitializationWorkItem: DispatchWorkItem?
     private var rimeInitializationGeneration = 0
     private var isRimeInitializationInProgress = false
@@ -263,11 +289,13 @@ private final class PinyinKeyboardInputState: ObservableObject {
     private var appliedCandidateGeneration = 0
     private var shouldResetCandidateScrollAfterRefresh = false
     private var partialSelectionSteps: [PartialSelectionStep] = []
+    private var isLocalPredictionComposition = false
 
     @Published private(set) var displayText = ""
     @Published private(set) var rawPinyinText = ""
     @Published private(set) var displayCursorOffset = 0
     @Published private(set) var hasComposition = false
+    @Published private(set) var isPredictionComposition = false
     @Published private(set) var candidates: [KeyboardInputCandidate] = []
     @Published private(set) var candidateScrollResetToken = 0
     @Published private(set) var isCandidateRefreshPending = false
@@ -289,6 +317,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
     @Published var isTranslationPanelVisible = false
     @Published var isNumericOrSymbolicKeyboardVisible = false
     @Published var isNineGridNumericKeyboardVisible = false
+    @Published private(set) var isShijianQuickLookupVisible = false
+    @Published private(set) var selectedShijianQuickCommand: PinyinShijianQuickCommand?
     @Published var translationText = ""
     @Published var translationStatusText = ""
     private var quickFillEditingOriginalText: String?
@@ -323,8 +353,12 @@ private final class PinyinKeyboardInputState: ObservableObject {
         rimeInitializationGeneration += 1
         rimeInitializationWorkItem?.cancel()
         rimeInitializationWorkItem = nil
-        Self.logInputEngineInfo("rime startup scheduled immediately")
-        reloadRimeInputEngine()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.reloadRimeInputEngine()
+        }
+        rimeInitializationWorkItem = workItem
+        Self.logInputEngineInfo("rime startup scheduled after 0.3s")
+        rimeInitializationQueue.asyncAfter(deadline: .now() + 0.3, execute: workItem)
     }
 
     func reloadRimeInputEngine() {
@@ -385,11 +419,14 @@ private final class PinyinKeyboardInputState: ObservableObject {
         clearPartialSelection()
         engine.clearComposition()
         hideCandidatePageIfNeeded()
+        hideShijianQuickLookupIfNeeded()
         setNineGridNumericKeyboardVisible(false)
         displayText = ""
         rawPinyinText = ""
         displayCursorOffset = 0
         hasComposition = false
+        isLocalPredictionComposition = false
+        isPredictionComposition = false
         candidates = []
         isCandidateRefreshPending = false
     }
@@ -432,6 +469,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         isRimeInitializationInProgress = false
         cancelPendingCandidateRefresh(clearCandidates: true)
         hideCandidatePageIfNeeded()
+        hideShijianQuickLookupIfNeeded()
         setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
         setNineGridNumericKeyboardVisible(false)
@@ -447,6 +485,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
         rawPinyinText = ""
         displayCursorOffset = 0
         hasComposition = false
+        isLocalPredictionComposition = false
+        isPredictionComposition = false
         candidates = []
         isCandidateRefreshPending = false
     }
@@ -478,7 +518,15 @@ private final class PinyinKeyboardInputState: ObservableObject {
             let userDataURL = candidate.url.appendingPathComponent("RimeUser", isDirectory: true)
             do {
                 try fileManager.createDirectory(at: userDataURL, withIntermediateDirectories: true)
+                try fileManager.createDirectory(
+                    at: userDataURL.appendingPathComponent("lua", isDirectory: true),
+                    withIntermediateDirectories: true
+                )
                 try Self.verifyDirectoryIsWritable(userDataURL, fileManager: fileManager)
+                try Self.verifyDirectoryIsWritable(
+                    userDataURL.appendingPathComponent("lua", isDirectory: true),
+                    fileManager: fileManager
+                )
                 return userDataURL
             } catch {
                 failures.append("\(candidate.label): \(userDataURL.path) - \(error.localizedDescription)")
@@ -506,6 +554,8 @@ private final class PinyinKeyboardInputState: ObservableObject {
             throw RimeDataPreparationError.bundledSharedDataMissing
         }
         let userDataURL = try writableRimeUserDataURL()
+        let luaDataURL = userDataURL.appendingPathComponent("lua", isDirectory: true)
+        let hasLuaDataDirectory = FileManager.default.fileExists(atPath: luaDataURL.path)
 
         let manifestURL = bundledRimeSharedDataURL.appendingPathComponent(Self.rimeSharedManifestName)
         let manifestData: Data
@@ -534,6 +584,9 @@ private final class PinyinKeyboardInputState: ObservableObject {
         )
         Self.logInputEngineInfo(
             "rime user build detail: \(userBuildSummary)"
+        )
+        Self.logInputEngineInfo(
+            "rime user data detail: user=\(userDataURL.path), luaDataDirectory=\(luaDataURL.path), hasLuaDataDirectory=\(hasLuaDataDirectory)"
         )
         Self.logInputEngineInfo(
             "rime data prepared bundledShared=true, hasBundledBuild=\(hasBundledBuild), hasUserBuild=\(hasUserBuild), hasBuild=\(hasCurrentBuild), hasMarker=\(hasCurrentDeploymentMarker), deployInKeyboard=false"
@@ -846,8 +899,106 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
     }
 
+    func toggleShijianQuickLookup() {
+        guard isChineseInputEnabled,
+              isUsingRimeEngine,
+              !hasComposition else {
+            hideShijianQuickLookupIfNeeded()
+            return
+        }
+
+        if isShijianQuickLookupVisible {
+            hideShijianQuickLookupIfNeeded()
+            return
+        }
+
+        isQuickFillPanelVisible = false
+        isQuickFillAddInputVisible = false
+        quickFillDraftText = ""
+        quickFillDraftCursorOffset = 0
+        quickFillEditingOriginalText = nil
+        setEmojiPanelVisible(false)
+        setTranslationPanelVisible(false)
+        setNineGridNumericKeyboardVisible(false)
+        hideCandidatePageIfNeeded()
+        isShijianQuickLookupVisible = true
+        selectedShijianQuickCommand = nil
+    }
+
+    @discardableResult
+    func hideShijianQuickLookupIfNeeded() -> Bool {
+        guard isShijianQuickLookupVisible else { return false }
+        let shouldClearShijianComposition = selectedShijianQuickCommand != nil
+        isShijianQuickLookupVisible = false
+        selectedShijianQuickCommand = nil
+        if shouldClearShijianComposition {
+            clearPartialSelection()
+            cancelPendingCandidateRefresh(clearCandidates: true)
+            engine.clearComposition()
+            hideCandidatePageIfNeeded()
+            refreshPublishedComposition()
+        }
+        return true
+    }
+
+    func applyShijianQuickCommand(_ command: PinyinShijianQuickCommand) {
+        guard isChineseInputEnabled, isUsingRimeEngine else { return }
+        isShijianQuickLookupVisible = true
+        selectedShijianQuickCommand = command
+        clearPartialSelection()
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        engine.clearComposition()
+        for character in command.code {
+            engine.insertLetter(String(character))
+        }
+        resetCandidateScrollPosition()
+        refreshPublishedComposition()
+        hideCandidatePageIfNeeded()
+        scheduleCandidateRefresh(resetCandidatesWhenEmpty: false)
+    }
+
+    func returnToShijianQuickCommandList() {
+        guard isShijianQuickLookupVisible else { return }
+        selectedShijianQuickCommand = nil
+        clearPartialSelection()
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        engine.clearComposition()
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+    }
+
+    @discardableResult
+    func deleteBackwardInShijianQuickLookup() -> Bool {
+        guard isShijianQuickLookupVisible else { return false }
+        guard let selectedShijianQuickCommand else {
+            return hideShijianQuickLookupIfNeeded()
+        }
+
+        let rawInput = engine.rawPinyin.isEmpty ? rawPinyinText : engine.rawPinyin
+        if rawInput.count <= selectedShijianQuickCommand.code.count {
+            returnToShijianQuickCommandList()
+            return true
+        }
+
+        _ = deleteBackward()
+        return true
+    }
+
+    func selectShijianQuickCandidate(_ candidate: KeyboardInputCandidate) -> String? {
+        let committedText = select(candidate)
+        if committedText != nil {
+            isShijianQuickLookupVisible = false
+            selectedShijianQuickCommand = nil
+        }
+        return committedText
+    }
+
     func insertLetter(_ letter: String) {
         hideQuickFillPanelIfNeeded()
+        if selectedShijianQuickCommand == nil {
+            hideShijianQuickLookupIfNeeded()
+        }
+        clearLocalPredictionComposition(resetContext: false)
         engine.insertLetter(letter)
         resetCandidateScrollPosition()
         hideCandidatePageIfNeeded()
@@ -874,8 +1025,27 @@ private final class PinyinKeyboardInputState: ObservableObject {
         return didDelete
     }
 
+    @discardableResult
+    func clearPredictionCompositionIfNeeded() -> Bool {
+        if isLocalPredictionComposition {
+            clearLocalPredictionComposition(resetContext: true)
+            return true
+        }
+        guard isPredictionComposition else { return false }
+        clearPartialSelection()
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        engine.clearComposition()
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+        return true
+    }
+
     func select(_ candidate: KeyboardInputCandidate) -> String? {
         guard !isCandidateRefreshPending else { return nil }
+        if candidate.isLocalPrediction {
+            clearLocalPredictionComposition(resetContext: false)
+            return candidate.text.isEmpty ? nil : candidate.text
+        }
         let rawPinyinBeforeSelect = engine.rawPinyin
         let committedText = engine.select(candidate)
         let rawPinyinAfterSelect = engine.rawPinyin
@@ -914,7 +1084,16 @@ private final class PinyinKeyboardInputState: ObservableObject {
         return finalCommittedText
     }
 
+    func recordCommittedTextForLocalPrediction(_ text: String) {
+        guard isChineseInputEnabled, engine.isUsingRime, !text.isEmpty else { return }
+        let predictions = localPredictionStore.recordCommittedText(text)
+        applyLocalPredictionCandidates(predictions)
+    }
+
     func commitCompositionAsText() -> String? {
+        if clearPredictionCompositionIfNeeded() {
+            return nil
+        }
         let text = engine.commitCompositionAsText()
         let finalText = finalizeCommittedText(text)
         clearPartialSelection()
@@ -925,6 +1104,9 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func commitRawInputAsText() -> String? {
+        if clearPredictionCompositionIfNeeded() {
+            return nil
+        }
         let text = engine.commitRawInputAsText()
         let finalText = finalizeCommittedText(text)
         clearPartialSelection()
@@ -936,8 +1118,10 @@ private final class PinyinKeyboardInputState: ObservableObject {
 
     func toggleChineseInput() {
         isChineseInputEnabled.toggle()
+        clearLocalPredictionComposition(resetContext: true)
         clearPartialSelection()
         hideCandidatePageIfNeeded()
+        hideShijianQuickLookupIfNeeded()
         refreshPublishedComposition()
         scheduleCandidateRefresh(resetCandidatesWhenEmpty: true)
     }
@@ -961,6 +1145,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
 
     func toggleQuickFillPanel() {
         reloadQuickFillItems()
+        hideShijianQuickLookupIfNeeded()
         setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
         if isQuickFillAddInputVisible {
@@ -979,6 +1164,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     func setQuickFillPanelVisible(_ visible: Bool) {
         if visible {
             reloadQuickFillItems()
+            hideShijianQuickLookupIfNeeded()
             setEmojiPanelVisible(false)
             setTranslationPanelVisible(false)
             hideCandidatePageIfNeeded()
@@ -993,6 +1179,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func showQuickFillAddInput() {
+        hideShijianQuickLookupIfNeeded()
         setEmojiPanelVisible(false)
         setTranslationPanelVisible(false)
         quickFillDraftText = ""
@@ -1125,6 +1312,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     }
 
     func openTranslationPanel(hasFullAccess: Bool) {
+        hideShijianQuickLookupIfNeeded()
         setEmojiPanelVisible(false)
         isQuickFillPanelVisible = false
         isQuickFillAddInputVisible = false
@@ -1140,6 +1328,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
         guard isTranslationPanelVisible != visible else { return }
         isTranslationPanelVisible = visible
         if visible {
+            hideShijianQuickLookupIfNeeded()
             isEmojiPanelVisible = false
             isQuickFillPanelVisible = false
             isQuickFillAddInputVisible = false
@@ -1272,6 +1461,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     func setNineGridNumericKeyboardVisible(_ visible: Bool) {
         guard isNineGridNumericKeyboardVisible != visible else { return }
         if visible {
+            hideShijianQuickLookupIfNeeded()
             isQuickFillPanelVisible = false
             isQuickFillAddInputVisible = false
             quickFillDraftText = ""
@@ -1287,6 +1477,7 @@ private final class PinyinKeyboardInputState: ObservableObject {
     func setEmojiPanelVisible(_ visible: Bool) {
         if visible {
             reloadEmojiItemsIfNeeded()
+            hideShijianQuickLookupIfNeeded()
             isQuickFillPanelVisible = false
             isQuickFillAddInputVisible = false
             quickFillDraftText = ""
@@ -1463,8 +1654,13 @@ private final class PinyinKeyboardInputState: ObservableObject {
             return
         }
 
-        if resetCandidatesWhenEmpty, !engine.hasComposition {
+        if resetCandidatesWhenEmpty, !engine.hasComposition, !engine.isPredictionComposition {
             applyCandidateRefreshResult([], generation: generation)
+            return
+        }
+
+        if engine.isPredictionComposition {
+            applyCandidateRefreshResult(engine.candidates, generation: generation)
             return
         }
 
@@ -1501,22 +1697,101 @@ private final class PinyinKeyboardInputState: ObservableObject {
         }
     }
 
+    private func applyLocalPredictionCandidates(_ predictions: [LocalPredictionCandidate]) {
+        candidateRefreshGeneration += 1
+        candidateRefreshWorkItem?.cancel()
+        candidateRefreshWorkItem = nil
+        appliedCandidateGeneration = candidateRefreshGeneration
+        setCandidateRefreshPending(false)
+
+        guard !predictions.isEmpty else {
+            isLocalPredictionComposition = false
+            if !candidates.isEmpty {
+                candidates = []
+            }
+            hideCandidatePageIfNeeded()
+            refreshPublishedComposition()
+            return
+        }
+
+        isLocalPredictionComposition = true
+        let predictionCandidates = predictions.enumerated().map { index, prediction in
+            KeyboardInputCandidate(
+                text: prediction.text,
+                consumeLength: 0,
+                comment: nil,
+                source: .localPrediction(index)
+            )
+        }
+        if candidates != predictionCandidates {
+            candidates = predictionCandidates
+        }
+        resetCandidateScrollPosition()
+        refreshPublishedComposition()
+    }
+
+    private func clearLocalPredictionComposition(resetContext: Bool) {
+        guard isLocalPredictionComposition else { return }
+        isLocalPredictionComposition = false
+        if resetContext {
+            localPredictionStore.resetContext()
+        }
+        cancelPendingCandidateRefresh(clearCandidates: true)
+        hideCandidatePageIfNeeded()
+        refreshPublishedComposition()
+    }
+
+    private func reorderedCandidatesByLocalPrediction(_ refreshedCandidates: [KeyboardInputCandidate]) -> [KeyboardInputCandidate] {
+        guard !refreshedCandidates.isEmpty,
+              !isLocalPredictionComposition,
+              selectedShijianQuickCommand == nil else {
+            return refreshedCandidates
+        }
+
+        let rankMap = localPredictionStore.currentPredictionRankMap()
+        guard !rankMap.isEmpty else { return refreshedCandidates }
+
+        let scanLimit = min(20, refreshedCandidates.count)
+        let scannedCandidates = Array(refreshedCandidates.prefix(scanLimit))
+        let remainingCandidates = Array(refreshedCandidates.dropFirst(scanLimit))
+
+        let boosted = scannedCandidates.enumerated()
+            .compactMap { offset, candidate -> (offset: Int, rank: Int, candidate: KeyboardInputCandidate)? in
+                guard let rank = rankMap[candidate.text] else { return nil }
+                return (offset, rank, candidate)
+            }
+            .sorted {
+                if $0.rank == $1.rank {
+                    return $0.offset < $1.offset
+                }
+                return $0.rank < $1.rank
+            }
+            .map(\.candidate)
+
+        guard !boosted.isEmpty else { return refreshedCandidates }
+
+        let boostedIDs = Set(boosted.map(\.id))
+        let normal = scannedCandidates.filter { !boostedIDs.contains($0.id) }
+        return boosted + normal + remainingCandidates
+    }
+
     private func applyCandidateRefreshResult(
         _ refreshedCandidates: [KeyboardInputCandidate],
         generation: Int
     ) {
         guard generation == candidateRefreshGeneration else { return }
+        let displayCandidates = reorderedCandidatesByLocalPrediction(refreshedCandidates)
         candidateRefreshWorkItem = nil
         setCandidateRefreshPending(false)
         appliedCandidateGeneration = generation
-        if candidates != refreshedCandidates {
-            candidates = refreshedCandidates
+        if candidates != displayCandidates {
+            candidates = displayCandidates
         }
         if shouldResetCandidateScrollAfterRefresh {
             shouldResetCandidateScrollAfterRefresh = false
             resetCandidateScrollPosition()
         }
-        if refreshedCandidates.isEmpty {
+        if displayCandidates.isEmpty {
             hideCandidatePageIfNeeded()
         }
     }
@@ -1566,6 +1841,12 @@ private final class PinyinKeyboardInputState: ObservableObject {
         let nextHasComposition = engine.hasComposition || !partialPrefixText.isEmpty
         if hasComposition != nextHasComposition {
             hasComposition = nextHasComposition
+        }
+
+        let nextIsPredictionComposition = partialPrefixText.isEmpty
+            && (isLocalPredictionComposition || engine.isPredictionComposition)
+        if isPredictionComposition != nextIsPredictionComposition {
+            isPredictionComposition = nextIsPredictionComposition
         }
 
         let nextInputEngineFailureText = engine.failureText
@@ -1648,18 +1929,31 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             handleSmartPunctuation()
         case .shift(let keyboardCase):
             handleShift(keyboardCase)
+        case .character(let value) where shouldOpenShijianQuickLookup(for: value):
+            handleShijianQuickLookupTrigger()
         case .character(let value) where pinyinState.isQuickFillAddInputVisible:
             handleQuickFillAddCharacter(value)
             applyLockedKeyboardCase()
         case .character(let value) where shouldDirectlyInsertURLCharacter(value):
             handleURLDirectCharacter(value)
+        case .character(let value) where shouldRouteShijianQuickLookupCharacterToInputEngine(value):
+            pinyinState.insertLetter(value)
+            applyLockedKeyboardCase()
+        case .character(let value) where isFixedPeriodCharacter(value):
+            handleFixedPeriod()
         case .character(let value) where directPunctuationText(for: value) != nil:
             handleDirectPunctuation(value)
         case .character(let value) where shouldRouteCharacterToInputEngine(value):
             pinyinState.insertLetter(value)
             applyLockedKeyboardCase()
+        case .backspace where pinyinState.isShijianQuickLookupVisible:
+            pinyinState.deleteBackwardInShijianQuickLookup()
+            applyLockedKeyboardCase()
         case .backspace where pinyinState.isQuickFillAddInputVisible:
             handleQuickFillAddBackspace()
+            applyLockedKeyboardCase()
+        case .backspace where pinyinState.isPredictionComposition:
+            pinyinState.clearPredictionCompositionIfNeeded()
             applyLockedKeyboardCase()
         case .backspace where pinyinState.hasComposition:
             if pinyinState.deleteBackward() {
@@ -1680,6 +1974,14 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
                 applyLockedKeyboardCaseDeferred()
                 return
             }
+            if commitFirstShijianQuickCandidateIfNeeded() {
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            if commitFirstPredictionCandidateIfNeeded() {
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
             if pinyinState.hasComposition,
                let text = pinyinState.commitRawInputAsText() {
                 commitText(text)
@@ -1688,8 +1990,8 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             }
             standardActionHandler.handle(action)
             applyLockedKeyboardCaseDeferred()
-        case .keyboardType(.alphabetic):
-            handleAlphabeticKeyboardTypeSwitch(action)
+        case .keyboardType:
+            handleKeyboardTypeSwitch(action)
         default:
             standardActionHandler.handle(action)
             applyLockedKeyboardCase()
@@ -1715,6 +2017,10 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         case .shift(let keyboardCase):
             handleShift(keyboardCase)
         case .character(let value):
+            if shouldOpenShijianQuickLookup(for: value) {
+                handleShijianQuickLookupTrigger()
+                return
+            }
             if pinyinState.isQuickFillAddInputVisible {
                 handleQuickFillAddCharacter(value)
                 applyLockedKeyboardCase()
@@ -1722,6 +2028,15 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             }
             if shouldDirectlyInsertURLCharacter(value) {
                 handleURLDirectCharacter(value)
+                return
+            }
+            if shouldRouteShijianQuickLookupCharacterToInputEngine(value) {
+                pinyinState.insertLetter(value)
+                applyLockedKeyboardCase()
+                return
+            }
+            if isFixedPeriodCharacter(value) {
+                handleFixedPeriod()
                 return
             }
             if directPunctuationText(for: value) != nil {
@@ -1735,8 +2050,17 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             pinyinState.insertLetter(value)
             applyLockedKeyboardCase()
         case .backspace:
+            if pinyinState.isShijianQuickLookupVisible {
+                pinyinState.deleteBackwardInShijianQuickLookup()
+                applyLockedKeyboardCase()
+                return
+            }
             if pinyinState.isQuickFillAddInputVisible {
                 handleQuickFillAddBackspace()
+                applyLockedKeyboardCase()
+                return
+            }
+            if pinyinState.clearPredictionCompositionIfNeeded() {
                 applyLockedKeyboardCase()
                 return
             }
@@ -1764,6 +2088,14 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
                 applyLockedKeyboardCase()
                 return
             }
+            if commitFirstShijianQuickCandidateIfNeeded() {
+                applyLockedKeyboardCase()
+                return
+            }
+            if commitFirstPredictionCandidateIfNeeded() {
+                applyLockedKeyboardCase()
+                return
+            }
             guard let first = pinyinState.firstFreshCompositionCandidateForCommit() else {
                 handleStandardAction(gesture, on: action)
                 return
@@ -1778,6 +2110,14 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
                 applyLockedKeyboardCaseDeferred()
                 return
             }
+            if commitFirstShijianQuickCandidateIfNeeded() {
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
+            if commitFirstPredictionCandidateIfNeeded() {
+                applyLockedKeyboardCaseDeferred()
+                return
+            }
             if pinyinState.hasComposition,
                let text = pinyinState.commitRawInputAsText() {
                 commitText(text)
@@ -1786,12 +2126,13 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             }
             handleStandardAction(gesture, on: action)
             applyLockedKeyboardCaseDeferred()
-        case .keyboardType(.alphabetic):
-            if pinyinState.hasComposition,
+        case .keyboardType:
+            if !isEditingShijianQuickLookupCommand,
+               pinyinState.hasComposition,
                let text = pinyinState.commitCompositionAsText() {
                 commitText(text)
             }
-            handleAlphabeticKeyboardTypeSwitch(gesture, on: action)
+            handleKeyboardTypeSwitch(gesture, on: action)
         default:
             if pinyinState.hasComposition,
                let text = pinyinState.commitCompositionAsText() {
@@ -1910,8 +2251,76 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         controller?.state.keyboardContext.keyboardInputType == .url
     }
 
+    private var isNumericOrSymbolicKeyboardType: Bool {
+        guard let keyboardType = controller?.state.keyboardContext.keyboardType else { return false }
+        switch keyboardType {
+        case .numeric, .symbolic:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isFixedPeriodCharacter(_ value: String) -> Bool {
+        value == "." && isNumericOrSymbolicKeyboardType
+    }
+
     private func shouldDirectlyInsertURLCharacter(_ value: String) -> Bool {
         isURLInputType && !pinyinState.isQuickFillAddInputVisible && !value.isEmpty
+    }
+
+    private var isEditingShijianQuickLookupCommand: Bool {
+        pinyinState.isShijianQuickLookupVisible
+            && pinyinState.selectedShijianQuickCommand != nil
+    }
+
+    private func shouldOpenShijianQuickLookup(for value: String) -> Bool {
+        value == "/"
+            && !isURLInputType
+            && pinyinState.isChineseInputEnabled
+            && pinyinState.isUsingRimeEngine
+            && !pinyinState.hasComposition
+            && !pinyinState.isQuickFillAddInputVisible
+    }
+
+    private func shouldRouteShijianQuickLookupCharacterToInputEngine(_ value: String) -> Bool {
+        guard pinyinState.isShijianQuickLookupVisible,
+              pinyinState.selectedShijianQuickCommand != nil,
+              pinyinState.hasComposition,
+              value.count == 1 else {
+            return false
+        }
+        if isPinyinLetter(value) {
+            return true
+        }
+        guard let scalar = value.unicodeScalars.first else { return false }
+        if scalar.value >= 48 && scalar.value <= 57 {
+            return true
+        }
+        return Set("+-=/\\';,.").contains(Character(value))
+    }
+
+    private func commitFirstShijianQuickCandidateIfNeeded() -> Bool {
+        guard isEditingShijianQuickLookupCommand,
+              let first = pinyinState.firstFreshCompositionCandidateForCommit() else {
+            return false
+        }
+        if let text = pinyinState.selectShijianQuickCandidate(first) {
+            commitText(text)
+        }
+        return true
+    }
+
+    private func commitFirstPredictionCandidateIfNeeded() -> Bool {
+        guard pinyinState.isPredictionComposition else { return false }
+        guard let first = pinyinState.firstFreshCandidateForCommit() else {
+            pinyinState.clearPredictionCompositionIfNeeded()
+            return true
+        }
+        if let text = pinyinState.select(first) {
+            commitText(text)
+        }
+        return true
     }
 
     private func handleURLDirectCharacter(_ value: String) {
@@ -1929,7 +2338,7 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         if asciiValue >= 48 && asciiValue <= 57 {
             return true
         }
-        return Set("';/\\-=,.").contains(Character(value))
+        return Set("';/\\-+=,.").contains(Character(value))
     }
 
     private func handleQuickFillAddCharacter(_ value: String) {
@@ -1974,6 +2383,15 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
              .custom(named: Self.numericSymbolicPlaceholderActionName):
             return true
         case .character(let value):
+            if shouldOpenShijianQuickLookup(for: value) {
+                return true
+            }
+            if shouldRouteShijianQuickLookupCharacterToInputEngine(value) {
+                return true
+            }
+            if isFixedPeriodCharacter(value) {
+                return true
+            }
             if pinyinState.isQuickFillAddInputVisible {
                 return true
             }
@@ -1985,6 +2403,8 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             return true
         case .keyboardType(.alphabetic):
             return true
+        case .keyboardType:
+            return isEditingShijianQuickLookupCommand
         default:
             return false
         }
@@ -1996,6 +2416,15 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
              .custom(named: Self.numericSymbolicPlaceholderActionName):
             return true
         case .character(let value):
+            if shouldOpenShijianQuickLookup(for: value) {
+                return true
+            }
+            if shouldRouteShijianQuickLookupCharacterToInputEngine(value) {
+                return true
+            }
+            if isFixedPeriodCharacter(value) {
+                return true
+            }
             if pinyinState.isQuickFillAddInputVisible {
                 return true
             }
@@ -2031,6 +2460,11 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
     }
 
     private func handleNineGridNumericKeyboardToggle() {
+        guard !isEditingShijianQuickLookupCommand else {
+            applyLockedKeyboardCase()
+            return
+        }
+        _ = pinyinState.clearPredictionCompositionIfNeeded()
         if pinyinState.hasComposition,
            let text = pinyinState.commitCompositionAsText() {
             commitText(text)
@@ -2045,6 +2479,11 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             return
         }
         if pinyinState.isChineseInputEnabled {
+            if pinyinState.clearPredictionCompositionIfNeeded() {
+                commitText("，")
+                applyLockedKeyboardCase()
+                return
+            }
             if pinyinState.hasComposition,
                let first = pinyinState.firstFreshCompositionCandidateForCommit(),
                let text = pinyinState.select(first) {
@@ -2057,8 +2496,33 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         applyLockedKeyboardCase()
     }
 
+    private func handleShijianQuickLookupTrigger() {
+        pinyinState.toggleShijianQuickLookup()
+        applyLockedKeyboardCase()
+    }
+
+    private func handleFixedPeriod() {
+        if pinyinState.clearPredictionCompositionIfNeeded() {
+            commitText(".")
+            applyLockedKeyboardCase()
+            return
+        }
+        if pinyinState.hasComposition,
+           let text = pinyinState.commitCompositionAsText() {
+            commitText(text)
+        }
+        commitText(".")
+        applyLockedKeyboardCase()
+    }
+
     private func handleDirectPunctuation(_ value: String) {
         guard let punctuation = directPunctuationText(for: value) else { return }
+        pinyinState.hideShijianQuickLookupIfNeeded()
+        if pinyinState.clearPredictionCompositionIfNeeded() {
+            commitText(punctuation)
+            applyLockedKeyboardCase()
+            return
+        }
         if pinyinState.hasComposition,
            let text = pinyinState.commitCompositionAsText() {
             commitText(text)
@@ -2089,16 +2553,18 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
         }
     }
 
-    private func handleAlphabeticKeyboardTypeSwitch(_ action: KeyboardAction) {
+    private func handleKeyboardTypeSwitch(_ action: KeyboardAction) {
+        _ = pinyinState.clearPredictionCompositionIfNeeded()
         applyLockedKeyboardCase()
         standardActionHandler.handle(action)
         applyLockedKeyboardCaseDeferred()
     }
 
-    private func handleAlphabeticKeyboardTypeSwitch(
+    private func handleKeyboardTypeSwitch(
         _ gesture: Keyboard.Gesture,
         on action: KeyboardAction
     ) {
+        _ = pinyinState.clearPredictionCompositionIfNeeded()
         applyLockedKeyboardCase()
         standardActionHandler.handle(gesture, on: action)
         applyLockedKeyboardCaseDeferred()
@@ -2109,6 +2575,7 @@ private final class PinyinKeyboardActionHandler: KeyboardActionHandler {
             pinyinState.appendQuickFillDraftText(text)
         } else {
             controller?.insertText(text)
+            pinyinState.recordCommittedTextForLocalPrediction(text)
         }
     }
 
@@ -2143,6 +2610,8 @@ private struct PinyinKeyboardView: View {
     private static let languageSwitchActionName = "simpanin.inputMode.toggleChineseEnglish"
     private static let smartPunctuationActionName = "simpanin.punctuation.smartCommaPeriod"
     private static let numericSymbolicPlaceholderActionName = "simpanin.keyboard.bottomRowPlaceholder1234"
+    private static let fixedPeriodActionName = "simpanin.punctuation.fixedPeriod"
+    private static let numericSymbolicThirdRowGapActionPrefix = "simpanin.numericSymbolicThirdRow."
 
     @ObservedObject var keyboardContext: KeyboardContext
     let services: Keyboard.Services
@@ -2172,7 +2641,13 @@ private struct PinyinKeyboardView: View {
                     params.view
                 }
             },
-            buttonView: { $0.view },
+            buttonView: { params in
+                if isNumericSymbolicThirdRowGapItem(params.item) {
+                    params.view.opacity(0)
+                } else {
+                    params.view
+                }
+            },
             collapsedView: { $0.view },
             emojiKeyboard: { $0.view },
             toolbar: { _ in
@@ -2260,6 +2735,7 @@ private struct PinyinKeyboardView: View {
             && keyboardContext.keyboardType == .alphabetic
             && keyboardContext.keyboardInputType != .url
             && !pinyinState.isCandidatePageVisible
+            && !pinyinState.isShijianQuickLookupVisible
             && !pinyinState.isQuickFillPanelVisible
             && !pinyinState.isQuickFillAddInputVisible
             && !pinyinState.isTranslationPanelVisible
@@ -2286,8 +2762,10 @@ private struct PinyinKeyboardView: View {
         case .alphabetic:
             return alphabeticKeyboardLayout(layout)
         case .numeric:
+            layout = numericOrSymbolicThirdRowLayout(layout)
             return numericOrSymbolicKeyboardLayout(layout)
         case .symbolic:
+            layout = numericOrSymbolicThirdRowLayout(layout)
             return numericOrSymbolicKeyboardLayout(layout)
         default:
             return layout
@@ -2435,7 +2913,7 @@ private struct PinyinKeyboardView: View {
         let widths = bottomRowWidths(from: PinyinBottomRowWidthConfig.alphabeticRatios)
         layout.itemRows[bottomRowIndex] = [
             bottomRowItem(numericItem, width: widths[0]),
-            bottomRowItem(action: .custom(named: Self.smartPunctuationActionName), width: widths[1]),
+            bottomRowItem(action: .character("/"), width: widths[1]),
             bottomRowItem(spaceItem, width: widths[2]),
             bottomRowItem(action: .custom(named: Self.languageSwitchActionName), width: widths[3]),
             bottomRowItem(primaryItem, width: widths[4])
@@ -2464,6 +2942,144 @@ private struct PinyinKeyboardView: View {
             bottomRowItem(primaryItem, width: widths[4])
         ]
         return layout
+    }
+
+    private func numericOrSymbolicThirdRowLayout(_ layout: KeyboardLayout) -> KeyboardLayout {
+        var layout = layout
+        let thirdRowIndex = 2
+        guard layout.itemRows.indices.contains(thirdRowIndex) else {
+            return layout
+        }
+
+        let row = layout.itemRows[thirdRowIndex].filter {
+            !isCharacterMarginAction($0.action)
+        }
+        guard !row.contains(where: { isFixedPeriodItem($0) }),
+              let firstInputIndex = row.firstIndex(where: { item in
+                  if case .character = item.action {
+                      return true
+                  }
+                  return false
+              }),
+              let lastInputIndex = row.lastIndex(where: { item in
+                  if case .character = item.action {
+                      return true
+                  }
+                  return false
+              }),
+              let leftControlItem = row[..<firstInputIndex].last,
+              let backspaceItem = row.last(where: { isBackspaceAction($0.action) }) else {
+            return layout
+        }
+
+        let compactInputWidth = KeyboardLayout.ItemWidth.inputPercentage(1.15)
+        let templateItem = row[lastInputIndex]
+        let periodItem = keyItem(
+            action: .character("."),
+            secondaryAction: .custom(named: Self.fixedPeriodActionName),
+            width: compactInputWidth,
+            height: templateItem.size.height,
+            alignment: templateItem.alignment,
+            edgeInsets: templateItem.edgeInsets
+        )
+
+        let leftControlEdgeInsets = edgeInsets(
+            leftControlItem.edgeInsets,
+            leading: 4
+        )
+        let backspaceEdgeInsets = edgeInsets(
+            backspaceItem.edgeInsets,
+            trailing: 4
+        )
+        let inputItems = row[firstInputIndex...lastInputIndex].map {
+            keyItem($0, width: compactInputWidth)
+        }
+
+        layout.itemRows[thirdRowIndex] = [
+            keyItem(leftControlItem, width: .available, edgeInsets: leftControlEdgeInsets),
+            thirdRowSideGapItem(
+                "leading",
+                action: row[firstInputIndex].action,
+                height: templateItem.size.height
+            )
+        ] + inputItems + [
+            periodItem,
+            thirdRowSideGapItem(
+                "trailing",
+                action: thirdRowSideGapMarkerAction("trailingAction"),
+                height: templateItem.size.height
+            ),
+            keyItem(backspaceItem, width: .available, edgeInsets: backspaceEdgeInsets)
+        ]
+        return layout
+    }
+
+    private func isFixedPeriodItem(_ item: KeyboardLayout.Item) -> Bool {
+        guard let secondaryAction = item.secondaryAction else {
+            return false
+        }
+
+        if case .custom(named: Self.fixedPeriodActionName) = secondaryAction {
+            return true
+        }
+        return false
+    }
+
+    private func isCharacterMarginAction(_ action: KeyboardAction) -> Bool {
+        if case .characterMargin = action {
+            return true
+        }
+        return false
+    }
+
+    private func isBackspaceAction(_ action: KeyboardAction) -> Bool {
+        if case .backspace = action {
+            return true
+        }
+        return false
+    }
+
+    private func thirdRowSideGapItem(
+        _ id: String,
+        action: KeyboardAction,
+        height: CGFloat
+    ) -> KeyboardLayout.Item {
+        keyItem(
+            action: action,
+            secondaryAction: thirdRowSideGapMarkerAction(id),
+            width: .points(PinyinKeyboardMetrics.numericSymbolicThirdRowSideGap),
+            height: height,
+            edgeInsets: .init()
+        )
+    }
+
+    private func thirdRowSideGapMarkerAction(_ id: String) -> KeyboardAction {
+        .custom(named: "\(Self.numericSymbolicThirdRowGapActionPrefix)\(id)Gap")
+    }
+
+    private func isNumericSymbolicThirdRowGapItem(_ item: KeyboardLayout.Item) -> Bool {
+        guard let secondaryAction = item.secondaryAction else {
+            return false
+        }
+
+        if case .custom(named: let name) = secondaryAction {
+            return name.hasPrefix(Self.numericSymbolicThirdRowGapActionPrefix)
+                && name.hasSuffix("Gap")
+        }
+        return false
+    }
+
+    private func edgeInsets(
+        _ edgeInsets: EdgeInsets,
+        leading: CGFloat? = nil,
+        trailing: CGFloat? = nil
+    ) -> EdgeInsets {
+        .init(
+            top: edgeInsets.top,
+            leading: leading ?? edgeInsets.leading,
+            bottom: edgeInsets.bottom,
+            trailing: trailing ?? edgeInsets.trailing
+        )
     }
 
     private func isSpaceAction(_ action: KeyboardAction) -> Bool {
@@ -2506,14 +3122,26 @@ private struct PinyinKeyboardView: View {
         return values.map { .percentage($0 / total) }
     }
 
+    private var bottomRowEdgeInsets: EdgeInsets {
+        .init(
+            top: 0,
+            leading: PinyinKeyboardMetrics.bottomRowHorizontalInset,
+            bottom: PinyinKeyboardMetrics.bottomRowShadowBottomInset,
+            trailing: PinyinKeyboardMetrics.bottomRowHorizontalInset
+        )
+    }
+
     private func bottomRowItem(
         _ item: KeyboardLayout.Item,
         width: KeyboardLayout.ItemWidth
     ) -> KeyboardLayout.Item {
-        bottomRowItem(
+        keyItem(
             action: item.action,
             secondaryAction: item.secondaryAction,
-            width: width
+            width: width,
+            height: PinyinKeyboardMetrics.bottomRowKeyHeight,
+            alignment: item.alignment,
+            edgeInsets: bottomRowEdgeInsets
         )
     }
 
@@ -2522,23 +3150,52 @@ private struct PinyinKeyboardView: View {
         secondaryAction: KeyboardAction? = nil,
         width: KeyboardLayout.ItemWidth
     ) -> KeyboardLayout.Item {
+        keyItem(
+            action: action,
+            secondaryAction: secondaryAction,
+            width: width,
+            height: PinyinKeyboardMetrics.bottomRowKeyHeight,
+            edgeInsets: bottomRowEdgeInsets
+        )
+    }
+
+    private func keyItem(
+        _ item: KeyboardLayout.Item,
+        action: KeyboardAction? = nil,
+        secondaryAction: KeyboardAction? = nil,
+        width: KeyboardLayout.ItemWidth,
+        edgeInsets: EdgeInsets? = nil
+    ) -> KeyboardLayout.Item {
+        keyItem(
+            action: action ?? item.action,
+            secondaryAction: secondaryAction ?? item.secondaryAction,
+            width: width,
+            height: item.size.height,
+            alignment: item.alignment,
+            edgeInsets: edgeInsets ?? item.edgeInsets
+        )
+    }
+
+    private func keyItem(
+        action: KeyboardAction,
+        secondaryAction: KeyboardAction? = nil,
+        width: KeyboardLayout.ItemWidth,
+        height: CGFloat,
+        alignment: Alignment = .center,
+        edgeInsets: EdgeInsets
+    ) -> KeyboardLayout.Item {
         KeyboardLayout.Item(
             action: action,
             secondaryAction: secondaryAction,
-            size: .init(width: width, height: PinyinKeyboardMetrics.bottomRowKeyHeight),
-            alignment: .center,
-            edgeInsets: .init(
-                top: 0,
-                leading: PinyinKeyboardMetrics.bottomRowHorizontalInset,
-                bottom: PinyinKeyboardMetrics.bottomRowShadowBottomInset,
-                trailing: PinyinKeyboardMetrics.bottomRowHorizontalInset
-            )
+            size: .init(width: width, height: height),
+            alignment: alignment,
+            edgeInsets: edgeInsets
         )
     }
 
     @ViewBuilder
     private var expandedCandidateOverlay: some View {
-        if pinyinState.isCandidatePageVisible {
+        if pinyinState.isCandidatePageVisible && !pinyinState.isShijianQuickLookupVisible {
             PinyinExpandedCandidateOverlay(
                 pinyinState: pinyinState,
                 insertText: insertText
@@ -2584,11 +3241,13 @@ private struct PinyinKeyboardView: View {
     private var currentToolbarHeight: CGFloat {
         PinyinKeyboardMetrics.candidateToolbarHeight
             + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+            + (pinyinState.isShijianQuickLookupVisible ? PinyinKeyboardMetrics.shijianQuickLookupPanelHeight : 0)
     }
 
     private var expandedCandidateOverlayTopOffset: CGFloat {
         PinyinKeyboardMetrics.expandedCandidateOverlayTopOffset
             + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+            + (pinyinState.isShijianQuickLookupVisible ? PinyinKeyboardMetrics.shijianQuickLookupPanelHeight : 0)
     }
 }
 
@@ -3178,6 +3837,30 @@ private struct PinyinCandidateToolbar: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
+            if pinyinState.isShijianQuickLookupVisible {
+                PinyinShijianQuickLookupDropdown(
+                    commands: PinyinShijianQuickCommand.all,
+                    selectedCommand: pinyinState.selectedShijianQuickCommand,
+                    candidates: pinyinState.candidates,
+                    isCandidateRefreshPending: pinyinState.isCandidateRefreshPending,
+                    selectCommand: { command in
+                        pinyinState.applyShijianQuickCommand(command)
+                    },
+                    selectCandidate: { candidate in
+                        guard let committedText = pinyinState.selectShijianQuickCandidate(candidate) else { return }
+                        insertText(committedText)
+                    },
+                    returnToCommands: {
+                        pinyinState.returnToShijianQuickCommandList()
+                    },
+                    close: {
+                        pinyinState.hideShijianQuickLookupIfNeeded()
+                    }
+                )
+                .frame(height: PinyinKeyboardMetrics.shijianQuickLookupPanelHeight)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             ZStack {
                 if pinyinState.isCandidatePageVisible {
                     expandedCompositionArea
@@ -3193,17 +3876,24 @@ private struct PinyinCandidateToolbar: View {
         .frame(height: toolbarHeight)
         .background(Color.clear)
         .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isQuickFillAddInputVisible)
+        .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.isShijianQuickLookupVisible)
+        .animation(.easeInOut(duration: PinyinKeyboardMetrics.quickFillPanelAnimationDuration), value: pinyinState.selectedShijianQuickCommand)
     }
 
     private var toolbarHeight: CGFloat {
         PinyinKeyboardMetrics.candidateToolbarHeight
             + (pinyinState.isQuickFillAddInputVisible ? PinyinKeyboardMetrics.quickFillAddBarHeight : 0)
+            + (pinyinState.isShijianQuickLookupVisible ? PinyinKeyboardMetrics.shijianQuickLookupPanelHeight : 0)
     }
 
     private var candidateInputArea: some View {
         VStack(spacing: 7) {
             compositionBar
-            migratedCandidateStrip
+            if pinyinState.isShijianQuickLookupVisible {
+                Color.clear.frame(height: 32)
+            } else {
+                migratedCandidateStrip
+            }
         }
         .padding(.horizontal, 2)
         .padding(.top, 4)
@@ -3351,6 +4041,218 @@ private struct PinyinCandidateToolbar: View {
             pinyinState: pinyinState,
             insertText: insertText
         )
+    }
+}
+
+private struct PinyinShijianQuickLookupDropdown: View {
+    let commands: [PinyinShijianQuickCommand]
+    let selectedCommand: PinyinShijianQuickCommand?
+    let candidates: [KeyboardInputCandidate]
+    let isCandidateRefreshPending: Bool
+    let selectCommand: (PinyinShijianQuickCommand) -> Void
+    let selectCandidate: (KeyboardInputCandidate) -> Void
+    let returnToCommands: () -> Void
+    let close: () -> Void
+
+    private let commandRowHeight: CGFloat = 44
+    private let candidateRowMinHeight: CGFloat = 48
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            ScrollView(.vertical, showsIndicators: false) {
+                content
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        }
+        .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 4)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if selectedCommand == nil {
+            commandList
+        } else {
+            candidateList
+        }
+    }
+
+    private var commandList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(commands) { command in
+                commandRow(command)
+                if command.id != commands.last?.id {
+                    Divider()
+                        .padding(.leading, 70)
+                }
+            }
+        }
+    }
+
+    private var candidateList: some View {
+        LazyVStack(spacing: 0) {
+            if isCandidateRefreshPending && candidates.isEmpty {
+                statusRow("候选生成中...")
+            } else if candidates.isEmpty {
+                statusRow("暂无候选")
+            } else {
+                ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                    candidateRow(candidate, index: index)
+                    if candidate.id != candidates.last?.id {
+                        Divider()
+                            .padding(.leading, 46)
+                    }
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            Text(headerTitle)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            HStack {
+                if selectedCommand != nil {
+                    Button {
+                        returnToCommands()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("返回时间速查列表")
+                } else {
+                    Color.clear.frame(width: 30, height: 30)
+                }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    close()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("关闭时间速查")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 38)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 0.5)
+        }
+    }
+
+    private var headerTitle: String {
+        guard let selectedCommand else { return "时间速查" }
+        return "\(selectedCommand.code) \(selectedCommand.title)"
+    }
+
+    private func commandRow(_ command: PinyinShijianQuickCommand) -> some View {
+        Button {
+            selectCommand(command)
+        } label: {
+            HStack(spacing: 10) {
+                Text(command.code)
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(1)
+                    .frame(width: 52, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(command.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(command.detail)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: commandRowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(command.code) \(command.title)")
+    }
+
+    private func candidateRow(_ candidate: KeyboardInputCandidate, index: Int) -> some View {
+        Button {
+            guard !isCandidateRefreshPending else { return }
+            selectCandidate(candidate)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(index + 1)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, alignment: .trailing)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(candidate.text)
+                        .font(.system(size: 17, weight: .regular))
+                        .fontWeight(index == 0 ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    if let commentText = commentText(for: candidate) {
+                        Text(commentText)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: candidateRowMinHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(!isCandidateRefreshPending)
+    }
+
+    private func statusRow(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
+    }
+
+    private func commentText(for candidate: KeyboardInputCandidate) -> String? {
+        guard let comment = candidate.comment?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !comment.isEmpty else {
+            return nil
+        }
+        return comment
     }
 }
 
@@ -4777,7 +5679,7 @@ private struct PinyinCandidateButton: View {
     let insertText: (String) -> Void
 
     private var candidateFont: Font {
-        .custom("NotoSansCJKsc-Regular", size: 19)
+        .system(size: 19, weight: .regular)
     }
 
     private var commentText: String? {
@@ -4807,7 +5709,7 @@ private struct PinyinCandidateButton: View {
 
                 if let commentText {
                     Text(commentText)
-                        .font(.custom("NotoSansCJKsc-Regular", size: expanded ? 14 : 12))
+                        .font(.system(size: expanded ? 14 : 12, weight: .regular))
                         .foregroundStyle(.secondary)
                 }
             }
